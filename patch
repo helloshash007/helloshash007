@@ -1,0 +1,5 @@
+# Assuming the first part of the log line is the timestamp
+timestamp_str = line.split(' ')[0] + " " + line.split(' ')[1]  # Extracts '2024-09-11 03:14:52'
+
+# Parse the log timestamp
+log_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
