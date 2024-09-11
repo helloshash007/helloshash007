@@ -1,0 +1,75 @@
+from fpdf import FPDF
+
+class PDFReport(FPDF):
+    def header(self):
+        # Add a title
+        self.set_font("Arial", "B", 16)
+        self.cell(200, 10, "Daily Replication Slot Health Report", ln=True, align="C")
+        self.ln(10)
+
+    def footer(self):
+        # Add a footer with the page number
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
+
+    def add_section_title(self, title):
+        # Add a section title
+        self.set_font("Arial", "B", 14)
+        self.cell(200, 10, title, ln=True)
+        self.ln(5)
+
+    def add_text(self, text, color=(0, 0, 0)):
+        # Add normal text
+        self.set_text_color(*color)
+        self.set_font("Arial", size=12)
+        self.multi_cell(0, 10, text)
+        self.ln(2)
+
+    def add_table_row(self, data, color=(0, 0, 0)):
+        # Add table-like rows for log entries
+        self.set_font("Arial", size=10)
+        self.set_text_color(*color)
+        for item in data:
+            self.cell(60, 10, item, border=1)
+        self.ln()
+
+def generate_report_pdf(slots):
+    """Generates a professional PDF report with ERROR in red, WARNING in yellow, and other text in black."""
+    pdf = PDFReport()
+    pdf.add_page()
+
+    # Summary Section
+    pdf.add_section_title("Summary")
+    total_errors = sum(len(data['errors']) for data in slots.values())
+    total_warnings = sum(len(data['warnings']) for data in slots.values())
+    total_resolved = sum(1 for data in slots.values() if data['resolved'])
+
+    pdf.add_text(f"Total Errors: {total_errors}")
+    pdf.add_text(f"Total Warnings: {total_warnings}")
+    pdf.add_text(f"Slots Resolved: {total_resolved}")
+    
+    # Detailed Section per slot
+    for slot, data in slots.items():
+        pdf.add_section_title(f"Slot: {slot}")
+
+        # Table headers for log entries
+        pdf.add_table_row(["Timestamp", "Type", "Message"], color=(0, 0, 0))
+
+        # Add errors
+        for error_time, error_msg in data['errors']:
+            pdf.add_table_row([error_time.strftime("%Y-%m-%d %H:%M:%S"), "ERROR", error_msg.strip()], color=(255, 0, 0))  # Red for errors
+
+        # Add warnings
+        for warning_time, warning_msg in data['warnings']:
+            pdf.add_table_row([warning_time.strftime("%Y-%m-%d %H:%M:%S"), "WARNING", warning_msg.strip()], color=(255, 255, 0))  # Yellow for warnings
+
+        # If the slot issue has been resolved
+        if data['resolved']:
+            pdf.add_text(f"Issue resolved for slot: {slot}", color=(0, 128, 0))  # Green for resolved
+
+    # Save the PDF to a file
+    report_file = f"{report_directory}/replication_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+    pdf.output(report_file)
+    
+    return report_file
