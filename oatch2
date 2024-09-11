@@ -1,0 +1,153 @@
+import os
+import logging
+import requests
+from fpdf import FPDF
+from datetime import datetime, timedelta
+import time
+
+# Configuration
+LAG_THRESHOLD_MB = 100  # Lag threshold in MB
+logfile = "/path/to/your/logfile.log"  # Path to the PostgreSQL log file
+report_directory = "/path/to/report/directory/"
+
+# Confluence configuration
+CONFLUENCE_URL = "https://your-confluence-instance"
+CONFLUENCE_PAGE_ID = "your-page-id"
+CONFLUENCE_USERNAME = "your_username"
+CONFLUENCE_PASSWORD = "your_password"
+
+# Setup logging
+logging.basicConfig(filename="report_generator.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def parse_logs_for_errors_and_lag():
+    """Parses the last 24 hours of the log file for ERROR, WARNING, and lag > LAG_THRESHOLD_MB."""
+    slots = {}
+    
+    # Read the log file and group by slot
+    with open(logfile, "r") as log:
+        for line in log:
+            if "ERROR" in line or "WARNING" in line:
+                timestamp_str = line.split(' ')[0] + " " + line.split(' ')[1]
+                log_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                # Extract replication slot name from log line if available
+                slot_name = extract_slot_name_from_log(line)
+                
+                if slot_name not in slots:
+                    slots[slot_name] = {
+                        'errors': [],
+                        'warnings': [],
+                        'resolved': False
+                    }
+                
+                if "ERROR" in line:
+                    slots[slot_name]['errors'].append((log_time, line))
+                elif "WARNING" in line:
+                    slots[slot_name]['warnings'].append((log_time, line))
+
+            # Check for resolved condition (e.g., confirmed_flush_lsn is changing)
+            if "Recovered" in line:  # or any other marker of issue resolution
+                slot_name = extract_slot_name_from_log(line)
+                if slot_name in slots:
+                    slots[slot_name]['resolved'] = True
+    
+    return slots
+
+
+def extract_slot_name_from_log(log_line):
+    """Dummy method to extract replication slot name from the log entry."""
+    # Implement logic based on your log format to extract the slot name.
+    # This can vary depending on how your logs are structured.
+    return "slot_name_placeholder"
+
+
+def generate_report_pdf(slots):
+    """Generates a PDF report with ERROR in red, WARNING in yellow, and other text in black."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+
+    for slot, data in slots.items():
+        pdf.set_text_color(0, 0, 0)  # Black for slot header
+        pdf.cell(200, 10, txt=f"Slot: {slot}", ln=True)
+
+        # Handle errors
+        for error_time, error_msg in data['errors']:
+            pdf.set_text_color(255, 0, 0)  # Red for errors
+            pdf.cell(200, 10, txt=f"[ERROR] {error_time}: {error_msg}", ln=True)
+
+        # Handle warnings
+        for warning_time, warning_msg in data['warnings']:
+            pdf.set_text_color(255, 255, 0)  # Yellow for warnings
+            pdf.cell(200, 10, txt=f"[WARNING] {warning_time}: {warning_msg}", ln=True)
+
+        # If the slot issue has been resolved
+        if data['resolved']:
+            pdf.set_text_color(0, 128, 0)  # Green for resolved
+            pdf.cell(200, 10, txt=f"Issue resolved for slot: {slot}", ln=True)
+        
+        pdf.set_text_color(0, 0, 0)  # Reset to black for next slot
+    
+    report_file = f"{report_directory}/replication_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+    pdf.output(report_file)
+    
+    return report_file
+
+
+def upload_report_to_confluence(report_file):
+    """Uploads the PDF report file to a Confluence page."""
+    # Your Confluence upload code
+    pass
+
+
+def delete_report_file(report_file):
+    """Deletes the local report file after it has been uploaded."""
+    if os.path.exists(report_file):
+        os.remove(report_file)
+        logging.info(f"Report file deleted: {report_file}")
+    else:
+        logging.error(f"Failed to delete report file: {report_file} not found.")
+
+
+def generate_daily_report():
+    """
+    Generates the daily report by reading logs, generating the PDF, uploading to Confluence, 
+    and deleting the local file. This function will be triggered at 10 AM IST.
+    """
+    logging.info("Generating daily replication health report...")
+    
+    # Parse logs
+    slots = parse_logs_for_errors_and_lag()
+    
+    # Generate the report
+    report_file = generate_report_pdf(slots)
+    
+    # Upload the report to Confluence
+    upload_report_to_confluence(report_file)
+    
+    # Delete the report file
+    delete_report_file(report_file)
+
+
+def run_at_10am_ist():
+    """
+    Continuously checks the time and runs the report generation at 10 AM IST daily.
+    """
+    while True:
+        now = datetime.utcnow()  # Get the current time in UTC
+        ist_time = now + timedelta(hours=5, minutes=30)  # Convert to IST (UTC+5:30)
+
+        if ist_time.hour == 10 and ist_time.minute == 0:
+            generate_daily_report()
+            logging.info("Report generated at 10 AM IST.")
+            
+            # Sleep until the next day to avoid multiple executions within the same day
+            time.sleep(60 * 60 * 24)  # Sleep for 24 hours
+
+        # Sleep for 60 seconds and check again
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    logging.info("Starting the report generation script with a daily 10 AM IST schedule...")
+    run_at_10am_ist()
