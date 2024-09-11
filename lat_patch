@@ -1,0 +1,168 @@
+from fpdf import FPDF
+from datetime import datetime
+import os
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Confluence credentials and report configuration
+CONFLUENCE_URL = "https://your-confluence-url/rest/api/content/your-page-id"
+USERNAME = "your_username"
+PASSWORD = "your_password"
+
+# Directory paths for logs and report
+log_directory = "/path/to/logs"
+report_directory = "/path/to/reports"
+
+# PDF Report class with color coding for errors, warnings, and infos
+class EnhancedPDFReport(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 20)
+        self.cell(200, 10, "Replication Slot Health Report", ln=True, align="C")
+        self.ln(5)
+        self.set_font("Arial", "I", 12)
+        self.cell(200, 10, f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align="C")
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
+
+    def add_cover_page(self):
+        self.add_page()
+        self.set_font("Arial", "B", 24)
+        self.cell(0, 80, "Daily Replication Report", ln=True, align="C")
+        self.set_font("Arial", "I", 16)
+        self.cell(0, 10, f"Date: {datetime.now().strftime('%Y-%m-%d')}", ln=True, align="C")
+        self.ln(50)
+
+    def add_summary_table(self, slots):
+        self.set_font("Arial", "B", 16)
+        self.cell(0, 10, "Summary", ln=True)
+        self.ln(5)
+        self.set_font("Arial", "B", 12)
+        self.cell(60, 10, "Slot Name", border=1)
+        self.cell(40, 10, "Total Errors", border=1)
+        self.cell(40, 10, "Total Warnings", border=1)
+        self.cell(40, 10, "Total Infos", border=1)
+        self.cell(40, 10, "Status", border=1)
+        self.ln()
+
+        self.set_font("Arial", "", 12)
+        for slot, data in slots.items():
+            self.cell(60, 10, slot, border=1)
+            self.cell(40, 10, str(len(data['errors'])), border=1)
+            self.cell(40, 10, str(len(data['warnings'])), border=1)
+            self.cell(40, 10, str(len(data['infos'])), border=1)
+            status = "OK"
+            if len(data['errors']) > 0:
+                status = "Critical"
+                self.set_text_color(255, 0, 0)
+            elif len(data['warnings']) > 0:
+                status = "Warning"
+                self.set_text_color(255, 255, 0)
+            else:
+                self.set_text_color(0, 128, 0)
+            self.cell(40, 10, status, border=1)
+            self.ln()
+        self.set_text_color(0, 0, 0)
+        self.ln(10)
+
+    def add_detailed_slot_section(self, slot, data):
+        self.add_page()
+        self.set_font("Arial", "B", 16)
+        self.cell(0, 10, f"Details for Slot: {slot}", ln=True)
+        self.ln(5)
+        self.set_font("Arial", "B", 12)
+        self.cell(60, 10, "Timestamp", border=1)
+        self.cell(40, 10, "Log Type", border=1)
+        self.cell(90, 10, "Message", border=1)
+        self.ln()
+        self.set_font("Arial", "", 12)
+        for error_time, error_msg in data['errors']:
+            self.set_text_color(255, 0, 0)
+            self.cell(60, 10, error_time.strftime("%Y-%m-%d %H:%M:%S"), border=1)
+            self.cell(40, 10, "ERROR", border=1)
+            self.cell(90, 10, error_msg, border=1)
+            self.ln()
+        for warning_time, warning_msg in data['warnings']:
+            self.set_text_color(255, 255, 0)
+            self.cell(60, 10, warning_time.strftime("%Y-%m-%d %H:%M:%S"), border=1)
+            self.cell(40, 10, "WARNING", border=1)
+            self.cell(90, 10, warning_msg, border=1)
+            self.ln()
+        for info_time, info_msg in data['infos']:
+            self.set_text_color(0, 0, 0)
+            self.cell(60, 10, info_time.strftime("%Y-%m-%d %H:%M:%S"), border=1)
+            self.cell(40, 10, "INFO", border=1)
+            self.cell(90, 10, info_msg, border=1)
+            self.ln()
+        self.set_text_color(0, 0, 0)
+        self.ln(5)
+
+    def generate_report(self, slots):
+        self.add_cover_page()
+        self.add_summary_table(slots)
+        for slot, data in slots.items():
+            self.add_detailed_slot_section(slot, data)
+        report_file = f"{report_directory}/replication_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+        self.output(report_file)
+        return report_file
+
+# Processing log function
+def process_logs():
+    slot_data = {}
+    with open(f"{log_directory}/replication_log.txt", "r") as log_file:
+        for line in log_file.readlines():
+            try:
+                timestamp_str, level, log_message = line.split(" ", 2)
+                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                if "slot" in log_message.lower():
+                    slot_name = log_message.split("slot:")[1].split()[0]
+                    if slot_name not in slot_data:
+                        slot_data[slot_name] = {'errors': [], 'warnings': [], 'infos': []}
+                    if level == "ERROR:":
+                        slot_data[slot_name]['errors'].append((timestamp, log_message.strip()))
+                    elif level == "WARNING:":
+                        slot_data[slot_name]['warnings'].append((timestamp, log_message.strip()))
+                    elif level == "INFO:":
+                        slot_data[slot_name]['infos'].append((timestamp, log_message.strip()))
+            except ValueError:
+                continue
+    pdf = EnhancedPDFReport()
+    report_file = pdf.generate_report(slot_data)
+    upload_to_confluence(report_file)
+
+# Upload to Confluence
+def upload_to_confluence(report_file):
+    files = {'file': open(report_file, 'rb')}
+    response = requests.post(CONFLUENCE_URL, auth=(USERNAME, PASSWORD), files=files)
+    if response.status_code == 200:
+        print("Report uploaded successfully to Confluence.")
+    else:
+        print(f"Failed to upload report to Confluence. Status Code: {response.status_code}")
+
+# Watchdog Handler to monitor log file changes
+class LogFileEventHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if not event.is_directory and "replication_log.txt" in event.src_path:
+            print("Log file modified, generating report...")
+            process_logs()
+
+# Setup watchdog observer
+def start_watchdog():
+    event_handler = LogFileEventHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path=log_directory, recursive=False)
+    observer.start()
+    try:
+        while True:
+            pass
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+# Entry point of the script
+if __name__ == "__main__":
+    start_watchdog()
