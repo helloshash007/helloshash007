@@ -1,0 +1,192 @@
+import psycopg2
+import time
+from datetime import datetime, timedelta
+from fpdf import FPDF
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Confluence settings
+CONFLUENCE_URL = "https://your-confluence-url/rest/api/content/your-page-id"
+USERNAME = "your_username"
+PASSWORD = "your_password"
+
+# Database connection
+db_config = {
+    "dbname": "your_db",
+    "user": "your_user",
+    "password": "your_password",
+    "host": "localhost",
+    "port": "5432",
+}
+
+# Directory where logs are stored
+log_directory = "/path/to/logs"
+report_directory = "/path/to/reports"
+
+# Class for monitoring the log file for new entries
+class LogFileHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if event.src_path.endswith("replication_log.txt"):
+            process_logs()
+
+# Function to check replication lag, flush LSN, and return status of slots
+def check_replication_slots():
+    connection = psycopg2.connect(**db_config)
+    cursor = connection.cursor()
+
+    query = """
+        SELECT slot_name, active, restart_lsn, confirmed_flush_lsn, 
+               pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS target_lag 
+        FROM pg_replication_slots 
+        WHERE slot_type='logical';
+    """
+    
+    cursor.execute(query)
+    replication_data = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
+    return replication_data
+
+# Function to log replication data
+def log_replication_data():
+    replication_data = check_replication_slots()
+    with open(f"{log_directory}/replication_log.txt", "a") as log_file:
+        for row in replication_data:
+            slot_name, active, restart_lsn, confirmed_flush_lsn, target_lag = row
+            log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_file.write(f"{log_time} SLOT: {slot_name}, ACTIVE: {active}, LAG: {target_lag}\n")
+
+            if target_lag != '0 bytes' or not active:
+                log_file.write(f"{log_time} ERROR: {slot_name} has issues. LAG: {target_lag}, ACTIVE: {active}\n")
+            else:
+                log_file.write(f"{log_time} INFO: {slot_name} is functioning normally.\n")
+
+# Function to process logs and generate a report
+def process_logs():
+    slot_data = {}
+
+    # Read the log file
+    with open(f"{log_directory}/replication_log.txt", "r") as log_file:
+        for line in log_file.readlines():
+            timestamp_str, log_message = line.split(" ", 1)
+            timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+
+            if "SLOT" in log_message:
+                parts = log_message.split(", ")
+                slot_name = parts[0].split(": ")[1]
+                active_status = parts[1].split(": ")[1] == 't'
+                lag = parts[2].split(": ")[1]
+
+                if slot_name not in slot_data:
+                    slot_data[slot_name] = {
+                        'errors': [],
+                        'warnings': [],
+                        'resolved': False
+                    }
+
+                if not active_status:
+                    slot_data[slot_name]['errors'].append((timestamp, f"Slot {slot_name} is inactive"))
+                elif "ERROR" in log_message:
+                    slot_data[slot_name]['errors'].append((timestamp, f"Lag: {lag}"))
+                elif "WARNING" in log_message:
+                    slot_data[slot_name]['warnings'].append((timestamp, f"Lag: {lag}"))
+                else:
+                    slot_data[slot_name]['resolved'] = True
+
+    report_file = generate_report_pdf(slot_data)
+    upload_to_confluence(report_file)
+
+# Generate PDF Report
+class PDFReport(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 16)
+        self.cell(200, 10, "Daily Replication Slot Health Report", ln=True, align="C")
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
+
+    def add_section_title(self, title):
+        self.set_font("Arial", "B", 14)
+        self.cell(200, 10, title, ln=True)
+        self.ln(5)
+
+    def add_text(self, text, color=(0, 0, 0)):
+        self.set_text_color(*color)
+        self.set_font("Arial", size=12)
+        self.multi_cell(0, 10, text)
+        self.ln(2)
+
+    def add_table_row(self, data, color=(0, 0, 0)):
+        self.set_font("Arial", size=10)
+        self.set_text_color(*color)
+        for item in data:
+            self.cell(60, 10, item, border=1)
+        self.ln()
+
+def generate_report_pdf(slots):
+    pdf = PDFReport()
+    pdf.add_page()
+
+    # Summary Section
+    pdf.add_section_title("Summary")
+    total_errors = sum(len(data['errors']) for data in slots.values())
+    total_warnings = sum(len(data['warnings']) for data in slots.values())
+    total_resolved = sum(1 for data in slots.values() if data['resolved'])
+
+    pdf.add_text(f"Total Errors: {total_errors}")
+    pdf.add_text(f"Total Warnings: {total_warnings}")
+    pdf.add_text(f"Slots Resolved: {total_resolved}")
+    
+    # Detailed Section per slot
+    for slot, data in slots.items():
+        pdf.add_section_title(f"Slot: {slot}")
+        pdf.add_table_row(["Timestamp", "Type", "Message"], color=(0, 0, 0))
+
+        for error_time, error_msg in data['errors']:
+            pdf.add_table_row([error_time.strftime("%Y-%m-%d %H:%M:%S"), "ERROR", error_msg.strip()], color=(255, 0, 0))
+
+        for warning_time, warning_msg in data['warnings']:
+            pdf.add_table_row([warning_time.strftime("%Y-%m-%d %H:%M:%S"), "WARNING", warning_msg.strip()], color=(255, 255, 0))
+
+        if data['resolved']:
+            pdf.add_text(f"Issue resolved for slot: {slot}", color=(0, 128, 0))
+
+    report_file = f"{report_directory}/replication_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+    pdf.output(report_file)
+
+    return report_file
+
+# Upload the report to Confluence
+def upload_to_confluence(report_file):
+    files = {'file': open(report_file, 'rb')}
+    response = requests.post(CONFLUENCE_URL, auth=(USERNAME, PASSWORD), files=files)
+    if response.status_code == 200:
+        print(f"Report uploaded successfully to Confluence.")
+    else:
+        print(f"Failed to upload report. Status Code: {response.status_code}")
+
+# Watchdog to monitor the log directory
+def start_watchdog():
+    event_handler = LogFileHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path=log_directory, recursive=False)
+    observer.start()
+
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        observer.stop()
+
+    observer.join()
+
+# Main function
+if __name__ == "__main__":
+    log_replication_data()
+    start_watchdog()
