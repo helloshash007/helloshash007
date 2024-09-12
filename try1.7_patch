@@ -1,0 +1,44 @@
+def process_logs():
+    logging.info("Processing logs from the last 24 hours...")
+    slot_data = {}
+    try:
+        now = datetime.utcnow() + timedelta(hours=4, minutes=30)  # Adding 4 hours and 30 minutes for IST
+        last_24_hours = now - timedelta(hours=24)
+
+        with open(f"{log_directory}/replication_log.txt", "r") as log_file:
+            for line in log_file.readlines():
+                try:
+                    # Extract timestamp and log level/message with adjusted splitting for extra spaces
+                    timestamp_str = line.split(' ')[0] + " " + line.split('  ')[1]
+                    log_level_msg = line.split(' ')[2]  # The log level
+                    log_message = ' '.join(line.split(' ')[3:]).strip()  # The log message
+
+                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+
+                    if timestamp < last_24_hours:
+                        continue  # Skip logs older than 24 hours
+
+                    if "slot" in log_message.lower():
+                        # Extract the slot name from the message
+                        slot_name = log_message.split("slot:")[1].split()[0].strip()
+                        if slot_name not in slot_data:
+                            slot_data[slot_name] = {'errors': [], 'warnings': [], 'infos': []}
+
+                        # Handle different log levels
+                        if log_level_msg.startswith("ERROR"):
+                            slot_data[slot_name]['errors'].append((timestamp, log_message.strip()))
+                        elif log_level_msg.startswith("WARNING"):
+                            slot_data[slot_name]['warnings'].append((timestamp, log_message.strip()))
+                        elif log_level_msg.startswith("INFO"):
+                            slot_data[slot_name]['infos'].append((timestamp, log_message.strip()))
+                except ValueError as e:
+                    logging.warning(f"Skipping malformed log line: {line} - Error: {e}")
+                    continue
+        if slot_data:
+            pdf = EnhancedPDFReport()
+            report_file = pdf.generate_report(slot_data)
+            upload_to_confluence(report_file)
+        else:
+            logging.info("No logs to process for the last 24 hours.")
+    except Exception as e:
+        logging.error(f"Error while processing logs: {e}")
