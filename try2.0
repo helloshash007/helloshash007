@@ -1,0 +1,224 @@
+import psycopg2
+import schedule
+import time
+import os
+import subprocess
+import logging
+import sys
+from datetime import datetime, timedelta
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Global Variables
+DB_CONFIG = {
+    'host': 'your_db_host',
+    'dbname': 'your_db_name',
+    'user': 'your_db_user',
+    'password': 'your_db_password'
+}
+
+LOG_FILE = "replication_monitor.log"
+ERROR_LOG_FILE = "replication_errors.log"
+PDF_REPORT = "replication_report.pdf"
+COPY_SCRIPT = "copy.py"
+MAX_LAG = 150 * 1024 * 1024  # 150 MB in bytes
+SLOT_CHECK_INTERVAL = 60  # seconds between checks
+CHECK_RETRY_INTERVAL = 10  # seconds to wait after failure
+
+# Confluence Upload Details
+CONFLUENCE_PAGE_ID = "your_page_id"
+CONFLUENCE_USERNAME = "your_confluence_username"
+CONFLUENCE_PASSWORD = "your_confluence_password"
+CONFLUENCE_API_URL = f"https://your_confluence_domain/rest/api/content/{CONFLUENCE_PAGE_ID}/attachments"
+
+# Set up logging
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s')
+
+def connect_db():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        logging.error(f"Error connecting to DB: {e}")
+        restart_on_failure()
+
+# Check replication slots
+def check_replication_slots():
+    try:
+        conn = connect_db()
+        cur = conn.cursor()
+        
+        # Query to get slot details
+        cur.execute("""
+            SELECT slot_name, active, restart_lsn, confirmed_flush_lsn, 
+                   pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS target_lag
+            FROM pg_replication_slots 
+            WHERE slot_type = 'logical';
+        """)
+        slots = cur.fetchall()
+        
+        if not slots:
+            raise Exception("No replication slots found. Check replication configuration.")
+        
+        for slot in slots:
+            slot_name, active, restart_lsn, confirmed_flush_lsn, target_lag = slot
+            target_lag_bytes = int(target_lag.split()[0]) * 1024 * 1024  # Convert MB to bytes
+            log_start_time = datetime.now()
+            
+            # Monitor for active slot and target_lag conditions
+            if target_lag_bytes > 0:
+                logging.warning(f"Warning: Slot {slot_name} has target_lag: {target_lag}")
+                if target_lag_bytes > MAX_LAG:
+                    logging.error(f"Error: Slot {slot_name} exceeds target_lag limit ({target_lag}). Running recovery.")
+                    run_copy_script()
+                    log_error_recovery_time(slot_name, log_start_time)
+            
+            if not active:
+                logging.error(f"Slot {slot_name} is inactive.")
+            
+            # Compare confirmed_flush_lsn across checks
+            check_confirmed_flush_lsn(slot_name, confirmed_flush_lsn)
+        
+        cur.close()
+        conn.close()
+    
+    except Exception as e:
+        logging.error(f"Error checking replication slots: {e}")
+        restart_on_failure()
+
+# Compare confirmed_flush_lsn
+def check_confirmed_flush_lsn(slot_name, confirmed_flush_lsn):
+    conn = connect_db()
+    cur = conn.cursor()
+    
+    time.sleep(SLOT_CHECK_INTERVAL)
+    cur.execute(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{slot_name}';")
+    new_flush_lsn = cur.fetchone()[0]
+    
+    if confirmed_flush_lsn == new_flush_lsn:
+        logging.error(f"Error: Slot {slot_name} confirmed_flush_lsn is not changing.")
+    else:
+        logging.info(f"Slot {slot_name} confirmed_flush_lsn started changing at {datetime.now()}")
+    
+    cur.close()
+    conn.close()
+
+# Run copy.py script
+def run_copy_script():
+    try:
+        subprocess.run(["python", COPY_SCRIPT], check=True)
+        logging.info("Successfully ran copy.py.")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running {COPY_SCRIPT}: {e}")
+
+# Log error recovery time
+def log_error_recovery_time(slot_name, start_time):
+    recovery_time = datetime.now()
+    duration = recovery_time - start_time
+    logging.info(f"Slot {slot_name} recovered. Error duration: {duration}.")
+
+# Restart the script in case of failure
+def restart_on_failure():
+    logging.info("Restarting the script due to failure...")
+    time.sleep(CHECK_RETRY_INTERVAL)  # Retry after a short delay
+    os.execv(sys.executable, ['python'] + sys.argv)
+
+# Generate PDF report for last 24 hours
+def generate_pdf_report():
+    try:
+        pdf = canvas.Canvas(PDF_REPORT, pagesize=letter)
+        pdf.setTitle("Replication Report")
+        
+        # Write the header
+        pdf.drawString(100, 750, f"Replication Report - {datetime.now().strftime('%Y-%m-%d')}")
+        
+        # Open and read the log file to generate the report
+        with open(LOG_FILE, 'r') as log_file:
+            lines = log_file.readlines()
+            y = 720  # Y position for PDF content
+            
+            # Filter logs from the last 24 hours
+            cutoff_time = datetime.now() - timedelta(days=1)
+            for line in lines:
+                log_time_str = line.split(" - ")[0]  # Extract log timestamp
+                log_time = datetime.strptime(log_time_str, '%Y-%m-%d %H:%M:%S,%f')
+                if log_time > cutoff_time:
+                    pdf.drawString(100, y, line.strip())
+                    y -= 20
+                    if y < 50:
+                        pdf.showPage()
+                        y = 750
+        
+        pdf.save()
+        logging.info("PDF report generated successfully.")
+        upload_pdf_to_confluence()
+    
+    except Exception as e:
+        logging.error(f"Error generating PDF report: {e}")
+
+# Upload PDF report to Confluence
+def upload_pdf_to_confluence():
+    try:
+        with open(PDF_REPORT, 'rb') as file:
+            files = {'file': (PDF_REPORT, file, 'application/pdf')}
+            response = requests.post(
+                CONFLUENCE_API_URL,
+                auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD),
+                files=files
+            )
+            if response.status_code == 200:
+                logging.info("Successfully uploaded the PDF report to Confluence.")
+            else:
+                logging.error(f"Failed to upload the PDF to Confluence. Status code: {response.status_code}")
+    except Exception as e:
+        logging.error(f"Error uploading PDF to Confluence: {e}")
+
+# Task Scheduling
+def schedule_tasks():
+    # Check replication slots every minute
+    schedule.every(1).minutes.do(check_replication_slots)
+    
+    # Run copy.py at 10 AM IST and max twice a day
+    schedule.every().day.at("10:00").do(run_copy_script)
+    
+    # Generate PDF report once a day
+    schedule.every().day.at("18:00").do(generate_pdf_report)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Watchdog event handler
+class MonitorHandler(FileSystemEventHandler):
+    def on_any_event(self, event):
+        if event.is_directory or event.event_type not in ('created', 'modified', 'deleted'):
+            return
+        # Restart the script if the log file is missing or modified
+        restart_on_failure()
+
+def start_watchdog(path='.'):
+    event_handler = MonitorHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path, recursive=False)
+    observer.start()
+    logging.info("Watchdog started monitoring the script.")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+# Start the monitoring process
+if __name__ == "__main__":
+    logging.info("Starting the replication monitor script.")
+    
+    # Start watchdog monitoring
+    start_watchdog()
+
+    # Schedule tasks
+    schedule_tasks()
