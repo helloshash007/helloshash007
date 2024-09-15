@@ -1,0 +1,15 @@
+def start_watchdog(path='.'):
+    logging.info("Starting Watchdog monitoring.")
+    event_handler = MonitorHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path, recursive=False)
+    observer.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+        logging.info("Watchdog monitoring stopped due to KeyboardInterrupt.")
+
+    observer.join()
