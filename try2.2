@@ -1,0 +1,91 @@
+import psycopg2
+import schedule
+import time
+import os
+import subprocess
+import logging
+import sys
+from datetime import datetime, timedelta
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import traceback  # Import traceback to capture detailed error info
+
+# Global variables for retries
+MAX_RETRY_LIMIT = 5
+retry_count = 0
+
+# Global Variables for database, logging, and PDF report
+# (The same as previously described)
+
+# Log setup
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s')
+
+# DB connection function with error logging
+def connect_db():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        # Log the detailed exception
+        logging.error("An error occurred while connecting to the database:")
+        logging.error(traceback.format_exc())  # This logs the full exception traceback
+        # Restart on failure
+        restart_on_failure()
+
+# Monitor replication slots function with detailed error logging
+def check_replication_slots():
+    global retry_count
+    try:
+        conn = connect_db()
+        cur = conn.cursor()
+        
+        # Your logic here...
+
+        cur.close()
+        conn.close()
+
+        # Reset retry count after successful execution
+        reset_retry_count()
+
+    except Exception as e:
+        # Log the detailed exception
+        logging.error("An error occurred in check_replication_slots:")
+        logging.error(traceback.format_exc())  # This logs the full exception traceback
+        # Proceed with restarting the script
+        restart_on_failure()
+
+# Restart on failure function with backoff
+def restart_on_failure():
+    global retry_count
+    
+    logging.info(f"Restarting the script due to failure (attempt {retry_count + 1}/{MAX_RETRY_LIMIT})...")
+    
+    if retry_count >= MAX_RETRY_LIMIT:
+        logging.error("Max retry limit reached. Exiting...")
+        sys.exit(1)  # Exiting if the retry limit is reached.
+    
+    retry_count += 1
+    time.sleep(CHECK_RETRY_INTERVAL)  # Wait before retrying
+    
+    # Use subprocess to restart the script in a separate process
+    try:
+        subprocess.run([sys.executable, *sys.argv], check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to restart the script: {e}")
+        restart_on_failure()  # Retry again if restart fails
+
+# Reset retry count after successful execution
+def reset_retry_count():
+    global retry_count
+    retry_count = 0
+
+# PDF report generation function (unchanged)
+
+# Schedule tasks function (unchanged)
+
+# Start watchdog function (unchanged)
+
+# Start the monitoring process (unchanged)
