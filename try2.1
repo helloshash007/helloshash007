@@ -1,0 +1,60 @@
+import psycopg2
+import schedule
+import time
+import os
+import subprocess
+import logging
+import sys
+from datetime import datetime, timedelta
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# Global variables for retries
+MAX_RETRY_LIMIT = 5
+retry_count = 0
+
+# Global Variables for database, logging, and PDF report
+# (The same as previously described)
+
+# Log setup
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s')
+
+# DB connection function (unchanged)
+
+# Monitor replication slots function (unchanged)
+
+# Restart on failure function with backoff
+def restart_on_failure():
+    global retry_count
+    
+    logging.info(f"Restarting the script due to failure (attempt {retry_count + 1}/{MAX_RETRY_LIMIT})...")
+    
+    if retry_count >= MAX_RETRY_LIMIT:
+        logging.error("Max retry limit reached. Exiting...")
+        sys.exit(1)  # Exiting if the retry limit is reached.
+    
+    retry_count += 1
+    time.sleep(CHECK_RETRY_INTERVAL)  # Wait before retrying
+    
+    # Use subprocess to restart the script in a separate process
+    try:
+        subprocess.run([sys.executable, *sys.argv], check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to restart the script: {e}")
+        restart_on_failure()  # Retry again if restart fails
+
+# Reset retry count after successful execution
+def reset_retry_count():
+    global retry_count
+    retry_count = 0
+
+# PDF report generation function (unchanged)
+
+# Schedule tasks function (unchanged)
+
+# Start watchdog function (unchanged)
+
+# Start the monitoring process (unchanged)
