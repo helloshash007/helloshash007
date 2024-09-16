@@ -1,0 +1,188 @@
+import psycopg2
+import logging
+import time
+import subprocess
+import psutil
+import schedule
+from datetime import datetime, timedelta
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from threading import Thread
+
+# Configure logging
+logging.basicConfig(filename='replication_monitor.log', 
+                    format='%(asctime)s %(levelname)s: %(message)s', 
+                    level=logging.INFO)
+
+DB_CONFIG = {
+    'dbname': 'your_db_name',
+    'user': 'your_db_user',
+    'password': 'your_db_password',
+    'host': 'your_db_host',
+    'port': 'your_db_port'
+}
+
+# Dictionary to track confirmed_flush_lsn, recovery times, and copy.py executions per slot
+slot_tracking = {}
+copy_script_run_count = 0
+max_copy_script_runs_per_day = 2
+
+# Reset the copy script run count daily
+def reset_copy_script_run_count():
+    global copy_script_run_count
+    copy_script_run_count = 0
+    logging.info("Resetting copy.py run count for the day")
+
+# Check if copy.py is already running
+def is_copy_script_running():
+    for process in psutil.process_iter(['pid', 'name', 'cmdline']):
+        if 'python' in process.info['name'] or 'python3' in process.info['name']:
+            if 'copy.py' in process.info['cmdline']:
+                logging.info(f"copy.py is already running with PID: {process.info['pid']}")
+                return True
+    return False
+
+# Run the copy.py script in a non-blocking way
+def run_copy_script():
+    global copy_script_run_count
+    if copy_script_run_count >= max_copy_script_runs_per_day:
+        logging.info(f"copy.py has already run {copy_script_run_count} times today, skipping execution.")
+        return
+
+    if not is_copy_script_running():
+        try:
+            # Run copy.py in a new thread to avoid blocking
+            def run():
+                logging.info("Starting copy.py in the background...")
+                subprocess.Popen(['python3', 'copy.py'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                logging.info("copy.py script started")
+                global copy_script_run_count
+                copy_script_run_count += 1
+
+            Thread(target=run).start()
+
+        except Exception as e:
+            logging.error(f"Error running copy.py in the background: {str(e)}")
+    else:
+        logging.info("copy.py is already running. Skipping execution.")
+
+# Monitor replication status
+def get_replication_status():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+
+        query = """
+            SELECT slot_name, active, restart_lsn, confirmed_flush_lsn, 
+            pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS target_lag
+            FROM pg_replication_slots 
+            WHERE slot_type = 'logical'
+        """
+        cur.execute(query)
+        replication_slots = cur.fetchall()
+
+        if not replication_slots:
+            logging.error("Check replication: No replication slots found")
+            raise Exception("Check replication: No replication slots found")
+
+        for slot in replication_slots:
+            slot_name, active, restart_lsn, confirmed_flush_lsn, target_lag = slot
+            log_replication_status(slot_name, active, confirmed_flush_lsn, target_lag)
+        
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        logging.error(f"Error checking replication status: {str(e)}")
+
+# Log the replication status and decide when to trigger copy.py
+def log_replication_status(slot_name, active, confirmed_flush_lsn, target_lag):
+    lag_value = parse_lag(target_lag)
+    current_time = datetime.now()
+
+    if not active:
+        logging.error(f"Slot {slot_name} is inactive. Active flag is False")
+    else:
+        logging.info(f"Slot {slot_name} is active. Current confirmed_flush_lsn: {confirmed_flush_lsn}, Target lag: {target_lag}")
+
+    # Log old and new confirmed_flush_lsn
+    if slot_name in slot_tracking:
+        previous_lsn = slot_tracking[slot_name]['confirmed_flush_lsn']
+        if previous_lsn != confirmed_flush_lsn:
+            logging.info(f"Slot {slot_name}: confirmed_flush_lsn changed from {previous_lsn} to {confirmed_flush_lsn}")
+        slot_tracking[slot_name]['confirmed_flush_lsn'] = confirmed_flush_lsn
+    else:
+        slot_tracking[slot_name] = {'confirmed_flush_lsn': confirmed_flush_lsn, 'recovery_start_time': None, 'recovery_end_time': None}
+
+    # Log when the lag starts recovering and when it fully recovers (lag == 0)
+    if lag_value > 0:
+        logging.warning(f"Slot {slot_name} target lag is not 0. Target lag: {target_lag}")
+
+        if slot_tracking[slot_name]['recovery_start_time'] is None:
+            slot_tracking[slot_name]['recovery_start_time'] = current_time
+            logging.info(f"Slot {slot_name} recovery started at {current_time}")
+
+    elif lag_value == 0:
+        if slot_tracking[slot_name]['recovery_start_time'] is not None:
+            slot_tracking[slot_name]['recovery_end_time'] = current_time
+            recovery_duration = current_time - slot_tracking[slot_name]['recovery_start_time']
+            logging.info(f"Slot {slot_name} target lag has recovered at {current_time}. Recovery took {recovery_duration}.")
+            slot_tracking[slot_name]['recovery_start_time'] = None
+            slot_tracking[slot_name]['recovery_end_time'] = None
+
+    if lag_value > 150:
+        logging.error(f"Slot {slot_name} lag exceeded 150MB. Running copy.py")
+        run_copy_script()
+
+def parse_lag(target_lag):
+    if 'MB' in target_lag:
+        return float(target_lag.replace('MB', ''))
+    return 0
+
+# Monitor replication without blocking other slots
+def monitor_replication():
+    logging.info("Starting replication status monitoring...")
+    get_replication_status()
+
+    # Check and compare confirmed_flush_lsn over two intervals
+    time.sleep(60)
+    get_replication_status()
+
+# Generate PDF report of the logs
+def generate_pdf_report():
+    logging.info("Generating PDF report...")
+    report_name = f'replication_report_{datetime.now().strftime("%Y-%m-%d")}.pdf'
+    c = canvas.Canvas(report_name, pagesize=letter)
+    c.drawString(100, 750, f"Replication Monitoring Report: {datetime.now().strftime('%Y-%m-%d')}")
+
+    with open("replication_monitor.log", "r") as log_file:
+        lines = log_file.readlines()
+        text = c.beginText(40, 720)
+        text.setFont("Helvetica", 10)
+        for line in lines:
+            if 'INFO' in line or 'WARNING' in line or 'ERROR' in line:
+                text.textLine(line.strip())
+        c.drawText(text)
+
+    c.save()
+    logging.info(f"PDF report saved as {report_name}")
+
+# Schedule daily tasks, including the replication check and resetting the copy.py run count
+def daily_tasks():
+    schedule.every().day.at("10:00").do(monitor_replication)
+    schedule.every().day.at("22:00").do(monitor_replication)
+    schedule.every().day.at("00:00").do(reset_copy_script_run_count)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+if __name__ == "__main__":
+    try:
+        monitor_replication()  # Start monitoring immediately
+        daily_tasks()          # Schedule tasks like replication monitoring and reset
+    except Exception as e:
+        logging.error(f"Main script failed: {str(e)}")
+        time.sleep(5)
+        logging.info("Restarting monitoring script after failure")
+        monitor_replication()  # Restart in case of failure
