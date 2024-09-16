@@ -1,0 +1,175 @@
+import psycopg2
+import logging
+import time
+import subprocess
+import psutil
+import schedule
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
+# Configure logging
+logging.basicConfig(filename='replication_monitor.log', 
+                    format='%(asctime)s %(levelname)s: %(message)s', 
+                    level=logging.INFO)
+
+DB_CONFIG = {
+    'dbname': 'your_db_name',
+    'user': 'your_db_user',
+    'password': 'your_db_password',
+    'host': 'your_db_host',
+    'port': 'your_db_port'
+}
+
+# Dictionary to track confirmed_flush_lsn and recovery times for each slot
+slot_tracking = {}
+
+def get_replication_status():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+
+        # Query for target lag
+        query = """
+            SELECT slot_name, active, restart_lsn, confirmed_flush_lsn, 
+            pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS target_lag
+            FROM pg_replication_slots 
+            WHERE slot_type = 'logical'
+        """
+        cur.execute(query)
+        replication_slots = cur.fetchall()
+
+        if not replication_slots:
+            logging.error("Check replication: No replication slots found")
+            raise Exception("Check replication: No replication slots found")
+
+        for slot in replication_slots:
+            slot_name, active, restart_lsn, confirmed_flush_lsn, target_lag = slot
+            log_replication_status(slot_name, active, confirmed_flush_lsn, target_lag)
+        
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        logging.error(f"Error checking replication status: {str(e)}")
+
+def log_replication_status(slot_name, active, confirmed_flush_lsn, target_lag):
+    lag_value = parse_lag(target_lag)
+    current_time = datetime.now()
+
+    if not active:
+        logging.error(f"Slot {slot_name} is inactive. Active flag is False")
+    else:
+        logging.info(f"Slot {slot_name} is active. Current confirmed_flush_lsn: {confirmed_flush_lsn}, Target lag: {target_lag}")
+
+    # Log old and new confirmed_flush_lsn
+    if slot_name in slot_tracking:
+        previous_lsn = slot_tracking[slot_name]['confirmed_flush_lsn']
+        if previous_lsn != confirmed_flush_lsn:
+            logging.info(f"Slot {slot_name}: confirmed_flush_lsn changed from {previous_lsn} to {confirmed_flush_lsn}")
+        slot_tracking[slot_name]['confirmed_flush_lsn'] = confirmed_flush_lsn
+    else:
+        slot_tracking[slot_name] = {'confirmed_flush_lsn': confirmed_flush_lsn, 'recovery_start_time': None, 'recovery_end_time': None}
+
+    # Log when the lag starts recovering and when it fully recovers (lag == 0)
+    if lag_value > 0:
+        logging.warning(f"Slot {slot_name} target lag is not 0. Target lag: {target_lag}")
+
+        # Start tracking recovery time if not already started
+        if slot_tracking[slot_name]['recovery_start_time'] is None:
+            slot_tracking[slot_name]['recovery_start_time'] = current_time
+            logging.info(f"Slot {slot_name} recovery started at {current_time}")
+
+    elif lag_value == 0:
+        if slot_tracking[slot_name]['recovery_start_time'] is not None:
+            # Log recovery end time and calculate duration
+            slot_tracking[slot_name]['recovery_end_time'] = current_time
+            recovery_duration = current_time - slot_tracking[slot_name]['recovery_start_time']
+            logging.info(f"Slot {slot_name} target lag has recovered at {current_time}. Recovery took {recovery_duration}.")
+            
+            # Reset recovery times for the next event
+            slot_tracking[slot_name]['recovery_start_time'] = None
+            slot_tracking[slot_name]['recovery_end_time'] = None
+        else:
+            logging.info(f"Slot {slot_name} target lag is 0. No previous lag recovery in progress.")
+
+    if lag_value > 150:
+        logging.error(f"Slot {slot_name} lag exceeded 150MB. Running copy.py")
+        run_copy_script()
+
+def parse_lag(target_lag):
+    # Parse the human-readable target_lag (e.g., '150MB') into a numerical value
+    if 'MB' in target_lag:
+        return float(target_lag.replace('MB', ''))
+    return 0
+
+def is_copy_script_running():
+    """Check if the copy.py script is already running."""
+    for process in psutil.process_iter(['pid', 'name', 'cmdline']):
+        # Check if the process is running and matches 'copy.py'
+        if 'python' in process.info['name'] or 'python3' in process.info['name']:
+            if 'copy.py' in process.info['cmdline']:
+                logging.info(f"copy.py is already running with PID: {process.info['pid']}")
+                return True
+    return False
+
+def run_copy_script():
+    """Run the copy.py script only if it's not already running."""
+    if not is_copy_script_running():
+        try:
+            # Run copy.py in the background
+            process = subprocess.Popen(['python3', 'copy.py'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logging.info("Running copy.py in the background")
+            
+            # Log the process ID
+            logging.info(f"copy.py process started with PID: {process.pid}")
+        except Exception as e:
+            logging.error(f"Error running copy.py in the background: {str(e)}")
+    else:
+        logging.info("copy.py is already running. Skipping execution.")
+
+def monitor_replication():
+    logging.info("Starting replication status monitoring...")
+    get_replication_status()
+
+    # Check and compare confirmed_flush_lsn over two intervals
+    time.sleep(60)
+    get_replication_status()  # Compare changes in confirmed_flush_lsn
+
+def generate_pdf_report():
+    logging.info("Generating PDF report...")
+    report_name = f'replication_report_{datetime.now().strftime("%Y-%m-%d")}.pdf'
+    c = canvas.Canvas(report_name, pagesize=letter)
+    c.drawString(100, 750, f"Replication Monitoring Report: {datetime.now().strftime('%Y-%m-%d')}")
+    
+    with open("replication_monitor.log", "r") as log_file:
+        lines = log_file.readlines()
+        text = c.beginText(40, 720)
+        text.setFont("Helvetica", 10)
+        for line in lines:
+            if 'INFO' in line or 'WARNING' in line or 'ERROR' in line:
+                text.textLine(line.strip())
+        c.drawText(text)
+    
+    c.save()
+    logging.info(f"PDF report saved as {report_name}")
+
+def daily_tasks():
+    """This runs at 10 AM IST and also monitors max twice a day."""
+    schedule.every().day.at("10:00").do(monitor_replication)
+    schedule.every().day.at("22:00").do(monitor_replication)  # Run max twice
+
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+if __name__ == "__main__":
+    # Start monitoring immediately, and schedule tasks
+    try:
+        monitor_replication()  # Start monitoring initially
+        daily_tasks()          # Schedule the rest of the tasks
+    except Exception as e:
+        logging.error(f"Main script failed: {str(e)}")
+        time.sleep(5)
+        logging.info("Restarting monitoring script after failure")
+        monitor_replication()  # Restart in case of failure
