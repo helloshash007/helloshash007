@@ -1,0 +1,28 @@
+# Upload report to Confluence
+def upload_to_confluence(report):
+    url = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}'
+    current_version = get_current_confluence_version()
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "id": CONFLUENCE_PAGE_ID,
+        "type": "page",
+        "title": "Replication Monitoring Status Report",
+        "version": {"number": current_version + 1},
+        "body": {
+            "storage": {
+                "value": "<p>" + report.replace('\n', '<br/>') + "</p>",
+                "representation": "storage"
+            }
+        }
+    }
+
+    response = requests.put(url, json=data, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD), headers=headers)
+
+    if response.status_code == 200:
+        logging.info("Report successfully uploaded to Confluence.")
+    else:
+        logging.error(f"Failed to upload report to Confluence. Status code: {response.status_code}, Response: {response.text}")
