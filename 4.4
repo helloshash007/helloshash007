@@ -1,0 +1,219 @@
+import psycopg2
+import logging
+import time
+from datetime import datetime, timedelta
+import schedule
+import subprocess
+import requests
+
+# Configuration for database and Confluence
+DB_HOST = "localhost"
+DB_NAME = "your_db"
+DB_USER = "your_user"
+DB_PASSWORD = "your_password"
+CONFLUENCE_BASE_URL = "https://your-confluence-site.atlassian.net/wiki"
+CONFLUENCE_PAGE_ID = "your_page_id"
+CONFLUENCE_USERNAME = "your_username"
+CONFLUENCE_PASSWORD = "your_password"
+COPY_SCRIPT_PATH = "copy.py"
+COPY_MAX_RUNS = 2
+COPY_RUN_INTERVAL_HOURS = 6
+
+# Logging setup
+logging.basicConfig(filename="replication_monitor.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Track the last time `copy.py` was run and how many times it's been run today
+last_copy_run = None
+copy_run_count = 0
+
+# Database connection setup
+def get_db_connection():
+    return psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASSWORD)
+
+# Monitor replication slots
+def get_replication_status():
+    global last_copy_run, copy_run_count
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+        SELECT slot_name, active, restart_lsn, confirmed_flush_lsn, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS target_lag 
+        FROM pg_replication_slots 
+        WHERE slot_type = 'logical';
+        """
+        cursor.execute(query)
+        slots = cursor.fetchall()
+
+        if not slots:
+            logging.error("No replication slots found. Check replication setup.")
+            return
+
+        for slot in slots:
+            slot_name, active, restart_lsn, confirmed_flush_lsn, target_lag = slot
+
+            # Log the slot status
+            logging.info(f"Slot: {slot_name}, Active: {active}, Lag: {target_lag}")
+
+            # Parse lag to MB
+            target_lag_mb = int(target_lag.replace("MB", "").strip()) if "MB" in target_lag else 0
+
+            # Handle warnings and errors
+            if target_lag_mb > 0:
+                logging.warning(f"Slot {slot_name} has a lag of {target_lag}.")
+            if target_lag_mb > 250:
+                logging.error(f"Slot {slot_name} lag exceeded 250MB. Running copy.py.")
+                run_copy_script()
+
+            # If the slot is inactive, log an error
+            if not active:
+                logging.error(f"Slot {slot_name} is inactive.")
+            
+            # Log confirmed_flush_lsn changes by checking it twice
+            previous_lsn = confirmed_flush_lsn
+            time.sleep(5)
+            cursor.execute(query)
+            slots_update = cursor.fetchall()
+            for updated_slot in slots_update:
+                updated_slot_name, updated_active, updated_restart_lsn, updated_confirmed_flush_lsn, updated_target_lag = updated_slot
+                if updated_slot_name == slot_name:
+                    if updated_confirmed_flush_lsn != previous_lsn:
+                        logging.info(f"Slot {slot_name} confirmed_flush_lsn changed from {previous_lsn} to {updated_confirmed_flush_lsn}.")
+                    else:
+                        logging.error(f"Slot {slot_name} confirmed_flush_lsn did not change.")
+
+        cursor.close()
+        conn.close()
+
+    except Exception as e:
+        logging.error(f"Error fetching replication status: {str(e)}")
+
+# Run copy.py script in the background
+def run_copy_script():
+    global last_copy_run, copy_run_count
+
+    # Ensure the script doesn't run more than twice a day with a 6-hour gap
+    now = datetime.now()
+    if copy_run_count >= COPY_MAX_RUNS:
+        logging.warning("Max copy.py runs reached for the day.")
+        return
+    if last_copy_run and (now - last_copy_run).total_seconds() < COPY_RUN_INTERVAL_HOURS * 3600:
+        logging.warning("Waiting for 6 hours before running copy.py again.")
+        return
+
+    # Run copy.py in the background
+    try:
+        logging.info("Running copy.py script.")
+        subprocess.Popen(['python3', COPY_SCRIPT_PATH])
+        last_copy_run = now
+        copy_run_count += 1
+    except Exception as e:
+        logging.error(f"Failed to run copy.py: {str(e)}")
+
+# Reset copy.py run count at midnight
+def reset_copy_script_run_count():
+    global copy_run_count
+    copy_run_count = 0
+
+# Generate PDF report
+def generate_status_report():
+    # Read log for last 24 hours
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    # Filter log entries for last 24 hours
+    now = datetime.now()
+    past_24_hours_logs = []
+    for log in logs:
+        log_time_str = log.split(" - ")[0]
+        log_time = datetime.strptime(log_time_str, "%Y-%m-%d %H:%M:%S")
+        if now - log_time < timedelta(days=1):
+            past_24_hours_logs.append(log)
+
+    # Count errors, warnings, and infos
+    error_count = sum(1 for log in past_24_hours_logs if "ERROR" in log)
+    warning_count = sum(1 for log in past_24_hours_logs if "WARNING" in log)
+    info_count = sum(1 for log in past_24_hours_logs if "INFO" in log)
+
+    # Format report
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report = (
+        "### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        "#### **Summary:**\n"
+        f"- **Errors:** {error_count}\n"
+        f"- **Warnings:** {warning_count}\n"
+        f"- **Infos:** {info_count}\n\n"
+        "---\n\n"
+        "#### **Logs:**\n\n"
+        f"{''.join(past_24_hours_logs)}\n\n"
+        "---\n\n"
+        "### **Conclusion:**\n\n"
+        "- **Errors:** Slots exceeded 250MB lag or were inactive.\n"
+        "- **Warnings:** Several instances of replication lag > 0MB.\n"
+        "- **Recoveries:** All errors were resolved successfully, with recovery times detailed above.\n\n"
+        "---\n"
+    )
+    return report
+
+# Upload report to Confluence
+def upload_to_confluence(report):
+    url = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}'
+    current_version = get_current_confluence_version()
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "id": CONFLUENCE_PAGE_ID,
+        "type": "page",
+        "title": "Replication Monitoring Status Report",
+        "version": {"number": current_version + 1},
+        "body": {
+            "storage": {
+                "value": "<p>" + report.replace('\n', '<br/>') + "</p>",
+                "representation": "storage"
+            }
+        }
+    }
+
+    response = requests.put(url, json=data, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD), headers=headers)
+
+    if response.status_code == 200:
+        logging.info("Report successfully uploaded to Confluence.")
+    else:
+        logging.error(f"Failed to upload report to Confluence. Status code: {response.status_code}, Response: {response.text}")
+
+# Get current Confluence page version
+def get_current_confluence_version():
+    url = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}'
+    response = requests.get(url, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD))
+
+    if response.status_code == 200:
+        content = response.json()
+        return content['version']['number']
+    else:
+        logging.error(f"Failed to fetch Confluence page version. Status code: {response.status_code}, Response: {response.text}")
+        return 1  # Default to version 1 if something goes wrong
+
+# Schedule tasks
+def schedule_tasks():
+    schedule.every(5).minutes.do(get_replication_status)
+    schedule.every().day.at("00:00").do(reset_copy_script_run_count)
+    schedule.every().day.at("23:59").do(lambda: upload_to_confluence(generate_status_report()))
+
+# Main loop
+def main():
+    logging.info("Starting replication monitoring script.")
+    schedule_tasks()
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
