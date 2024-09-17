@@ -1,0 +1,58 @@
+from datetime import datetime
+
+def generate_status_report():
+    # Get current time for report generation
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    report = f"""
+    ### **Replication Monitoring Status Report (Last 24 Hours)**
+
+    **Date:** {datetime.now().strftime("%Y-%m-%d")}  
+    **Report Generated At:** {current_time}
+
+    ---
+    
+    #### **Summary:**
+    - **Errors:** {error_count}  
+    - **Warnings:** {warning_count}  
+    - **Infos:** {info_count}  
+    
+    ---
+    
+    #### **Detailed Errors:**
+
+    {error_details}  
+    
+    ---
+    
+    #### **Detailed Warnings:**
+
+    {warning_details}  
+    
+    ---
+    
+    #### **Detailed Infos:**
+
+    {info_details}  
+    
+    ---
+    
+    #### **Recovery Summary:**
+
+    {recovery_summary}  
+    
+    ---
+    
+    ### **Conclusion:**
+    
+    - **Errors:** Slots exceeded 250MB lag or were inactive.
+    - **Warnings:** Several instances of replication lag > 0MB.
+    - **Recoveries:** All errors were resolved successfully, with recovery times detailed above.
+
+    ---
+    
+    ### **Next Steps:**
+    Continue monitoring replication status and ensure immediate attention to lags exceeding 250MB to avoid further issues.
+    """
+
+    return report
