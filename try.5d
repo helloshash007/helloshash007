@@ -1,0 +1,126 @@
+import re
+import requests
+import logging
+from datetime import datetime, timedelta
+import os
+
+# Configure logging
+logging.basicConfig(filename='replication_monitor.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+CONFLUENCE_BASE_URL = 'https://your-confluence-instance/wiki'
+CONFLUENCE_PAGE_ID = '123456'
+CONFLUENCE_USERNAME = 'your-username'
+CONFLUENCE_PASSWORD = 'your-password'
+
+# Track resolved errors
+resolved_errors = {}
+
+# Generate status report
+def generate_status_report():
+    # Read log for the last 24 hours
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    # Define a function to parse timestamp with comma or period
+    def parse_timestamp(timestamp_str):
+        try:
+            # Convert comma to period for milliseconds if necessary
+            timestamp_str = re.sub(r"(\d{2}):(\d{2}):(\d{2}),(\d+)", r"\1:\2:\3.\4", timestamp_str)
+            return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            logging.warning(f"Skipping log entry with invalid timestamp: {timestamp_str}")
+            return None
+
+    # Filter log entries for the last 24 hours
+    now = datetime.now()
+    past_24_hours_logs = []
+    for log in logs:
+        parts = log.split(" - ", 1)
+        if len(parts) < 2:
+            continue
+        log_time_str = parts[0]
+        log_time = parse_timestamp(log_time_str)
+        if log_time and now - log_time < timedelta(days=1):
+            past_24_hours_logs.append(log)
+    
+    # Separate and count distinct errors and warnings
+    errors = set()
+    warnings = set()
+    for log in past_24_hours_logs:
+        if "ERROR" in log:
+            errors.add(log)
+            # Extract and track resolved errors
+            match = re.search(r"Slot (\S+) lag exceeded 250 MB", log)
+            if match:
+                slot = match.group(1)
+                resolved_errors[slot] = {"error": log, "resolved": False}
+        elif "WARNING" in log:
+            warnings.add(log)
+
+    # Track resolutions
+    resolution_info = []
+    for log in past_24_hours_logs:
+        if "INFO" in log and "lag recovered" in log:
+            for slot, error_info in resolved_errors.items():
+                if error_info["error"] in log:
+                    error_info["resolved"] = True
+                    resolution_time = parse_timestamp(log.split(" - ")[0])
+                    error_time = parse_timestamp(error_info["error"].split(" - ")[0])
+                    duration = resolution_time - error_time
+                    resolution_info.append(f"Slot: {slot}, Error Resolved: {error_info['error'].strip()}, Time Taken: {duration}")
+
+    # Format report (with escaped f-strings)
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report = (
+        "### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        "#### **Summary:**\n"
+        f"- **Distinct Errors:** {len(errors)}\n"
+        f"- **Distinct Warnings:** {len(warnings)}\n\n"
+        "---\n\n"
+        "#### **Errors:**\n\n"
+        f"{''.join(errors)}\n\n"
+        "---\n\n"
+        "#### **Warnings:**\n\n"
+        f"{''.join(warnings)}\n\n"
+        "---\n\n"
+        "### **Conclusion:**\n\n"
+        f"{'\n'.join(resolution_info) if resolution_info else 'No errors resolved in the last 24 hours.'}\n\n"
+        "---\n"
+    )
+    return report
+
+# Upload the report as an attachment to Confluence and delete it after upload
+def upload_to_confluence(report):
+    # Include the report generation date and time in the filename
+    report_date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    report_filename = f"replication_status_report_{report_date_time}.txt"
+    
+    # Save the report to a file
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    # Upload the file as an attachment
+    upload_endpoint = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}/child/attachment'
+    headers = {
+        'X-Atlassian-Token': 'no-check'
+    }
+    files = {
+        'file': (report_filename, open(report_filename, 'rb')),
+    }
+    response = requests.post(upload_endpoint, files=files, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD), headers=headers)
+
+    # Check if the upload was successful
+    if response.status_code == 200:
+        logging.info(f"Report {report_filename} successfully uploaded to Confluence.")
+        # Delete the local file after successful upload
+        os.remove(report_filename)
+    else:
+        logging.error(f"Failed to upload report {report_filename} to Confluence. Status code: {response.status_code}, Response: {response.text}")
+
+# Example of running the report generation and upload
+if __name__ == "__main__":
+    report = generate_status_report()
+    upload_to_confluence(report)
