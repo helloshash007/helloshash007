@@ -69,25 +69,25 @@ def generate_status_report():
                     duration = resolution_time - error_time
                     resolution_info.append(f"Slot: {slot}, Error Resolved: {error_info['error'].strip()}, Time Taken: {duration}")
 
-    # Format report (with escaped f-strings)
+    # Format report using standard concatenation to avoid issues with backslashes in f-strings
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report = (
         "### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
-        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
-        f"**Report Generated At:** {current_time}\n\n"
+        "**Date:** " + datetime.now().strftime("%Y-%m-%d") + "\n"
+        "**Report Generated At:** " + current_time + "\n\n"
         "---\n\n"
         "#### **Summary:**\n"
-        f"- **Distinct Errors:** {len(errors)}\n"
-        f"- **Distinct Warnings:** {len(warnings)}\n\n"
+        "- **Distinct Errors:** " + str(len(errors)) + "\n"
+        "- **Distinct Warnings:** " + str(len(warnings)) + "\n\n"
         "---\n\n"
         "#### **Errors:**\n\n"
-        f"{''.join(errors)}\n\n"
+        + ''.join(errors) + "\n\n"
         "---\n\n"
         "#### **Warnings:**\n\n"
-        f"{''.join(warnings)}\n\n"
+        + ''.join(warnings) + "\n\n"
         "---\n\n"
         "### **Conclusion:**\n\n"
-        f"{'\n'.join(resolution_info) if resolution_info else 'No errors resolved in the last 24 hours.'}\n\n"
+        + ('\n'.join(resolution_info) if resolution_info else 'No errors resolved in the last 24 hours.') + "\n\n"
         "---\n"
     )
     return report
