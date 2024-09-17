@@ -1,0 +1,189 @@
+import re
+import requests
+import logging
+from datetime import datetime, timedelta
+import os
+
+# Configure logging
+logging.basicConfig(filename='replication_monitor.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+CONFLUENCE_BASE_URL = 'https://your-confluence-instance/wiki'
+CONFLUENCE_PAGE_ID = '123456'
+CONFLUENCE_USERNAME = 'your-username'
+CONFLUENCE_PASSWORD = 'your-password'
+
+# Track errors, recovery info, and slot activity
+resolved_errors = {}
+current_errors = {}
+slot_status = {}
+
+# Generate status report
+def generate_status_report():
+    # Read log for the last 24 hours
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    # Define a function to parse timestamp with comma or period
+    def parse_timestamp(timestamp_str):
+        try:
+            # Convert comma to period for milliseconds if necessary
+            timestamp_str = re.sub(r"(\d{2}):(\d{2}):(\d{2}),(\d+)", r"\1:\2:\3.\4", timestamp_str)
+            return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            logging.warning(f"Skipping log entry with invalid timestamp: {timestamp_str}")
+            return None
+
+    # Filter log entries for the last 24 hours
+    now = datetime.now()
+    past_24_hours_logs = []
+    for log in logs:
+        parts = log.split(" - ", 1)
+        if len(parts) < 2:
+            continue
+        log_time_str = parts[0]
+        log_time = parse_timestamp(log_time_str)
+        if log_time and now - log_time < timedelta(days=1):
+            past_24_hours_logs.append(log)
+
+    # Separate and group errors, warnings, and slot activity by slot
+    errors_by_slot = {}
+    warnings_by_slot = {}
+    slot_activity_changes = {}
+
+    for log in past_24_hours_logs:
+        slot_match = re.search(r"Slot (\S+)", log)
+        if slot_match:
+            slot = slot_match.group(1)
+
+            if "ERROR" in log:
+                if slot not in errors_by_slot:
+                    errors_by_slot[slot] = []
+                errors_by_slot[slot].append(log)
+                # Track unresolved errors
+                if slot not in current_errors:
+                    current_errors[slot] = {"error": log, "start_time": parse_timestamp(log.split(" - ")[0])}
+            elif "WARNING" in log:
+                if slot not in warnings_by_slot:
+                    warnings_by_slot[slot] = []
+                warnings_by_slot[slot].append(log)
+            elif "INFO" in log:
+                if "lag recovered" in log:
+                    if slot in current_errors:
+                        resolved_time = parse_timestamp(log.split(" - ")[0])
+                        start_time = current_errors[slot]["start_time"]
+                        duration = resolved_time - start_time
+                        resolved_errors[slot] = {
+                            "error": current_errors[slot]["error"],
+                            "resolved_time": resolved_time,
+                            "duration": duration
+                        }
+                        del current_errors[slot]
+                elif "slot inactive" in log:
+                    slot_activity_changes[slot] = slot_activity_changes.get(slot, {})
+                    slot_activity_changes[slot]["inactive_time"] = parse_timestamp(log.split(" - ")[0])
+                elif "slot active" in log:
+                    if slot in slot_activity_changes and "inactive_time" in slot_activity_changes[slot]:
+                        active_time = parse_timestamp(log.split(" - ")[0])
+                        inactive_time = slot_activity_changes[slot].pop("inactive_time")
+                        duration = active_time - inactive_time
+                        slot_activity_changes[slot]["last_active_duration"] = duration
+                        slot_activity_changes[slot]["last_active_time"] = active_time
+
+    # Prepare counts for errors and warnings
+    total_errors = sum(len(errors) for errors in errors_by_slot.values())
+    total_warnings = sum(len(warnings) for warnings in warnings_by_slot.values())
+
+    # Format the report by slot, with distinct errors, warnings, and activity changes
+    report = (
+        "### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        "**Date:** " + datetime.now().strftime("%Y-%m-%d") + "\n"
+        "**Report Generated At:** " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n\n"
+        "---\n\n"
+        "#### **Summary**\n"
+        f"Total Errors: {total_errors}\n"
+        f"Total Warnings: {total_warnings}\n\n"
+        "---\n\n"
+        "#### **Details by Slot:**\n\n"
+    )
+
+    # Add errors, warnings, and activity changes for each slot
+    for slot in set(errors_by_slot.keys()).union(warnings_by_slot.keys(), slot_activity_changes.keys()):
+        error_count = len(errors_by_slot.get(slot, []))
+        warning_count = len(warnings_by_slot.get(slot, []))
+
+        report += f"#### Slot: {slot}\n"
+        report += f"Errors: {error_count}, Warnings: {warning_count}\n"
+
+        # Add errors for this slot
+        if error_count > 0:
+            report += "**Errors:**\n"
+            distinct_errors = list(set(errors_by_slot[slot]))  # Remove duplicates
+            report += "\n".join(distinct_errors) + "\n"
+
+        # Add warnings for this slot
+        if warning_count > 0:
+            report += "**Warnings:**\n"
+            distinct_warnings = list(set(warnings_by_slot[slot]))  # Remove duplicates
+            report += "\n".join(distinct_warnings) + "\n"
+
+        # Add activity changes
+        if slot in slot_activity_changes:
+            activity_changes = slot_activity_changes[slot]
+            if "inactive_time" in activity_changes:
+                report += f"Slot went inactive at: {activity_changes['inactive_time'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+            if "last_active_time" in activity_changes:
+                report += (
+                    f"Slot became active again at: {activity_changes['last_active_time'].strftime('%Y-%m-%d %H:%M:%S')}, "
+                    f"Duration of inactivity: {activity_changes['last_active_duration']}\n"
+                )
+        report += "---\n\n"
+
+    # Add resolution details
+    report += "### **Conclusion:**\n\n"
+    if resolved_errors:
+        for slot, error_info in resolved_errors.items():
+            error_time = error_info["error"].split(" - ")[0]
+            resolved_time = error_info["resolved_time"].strftime("%Y-%m-%d %H:%M:%S")
+            duration = error_info["duration"]
+            report += (
+                f"Slot: {slot}, Error Occurred At: {error_time}, Resolved At: {resolved_time}, "
+                f"Time Taken: {duration}\n"
+            )
+    else:
+        report += 'No errors resolved in the last 24 hours.'
+
+    report += "---\n"
+    return report
+
+# Upload the report as an attachment to Confluence and delete it after upload
+def upload_to_confluence(report):
+    # Include the report generation date and time in the filename
+    report_date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    report_filename = f"replication_status_report_{report_date_time}.txt"
+    
+    # Save the report to a file
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    # Upload the file as an attachment
+    upload_endpoint = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}/child/attachment'
+    headers = {
+        'X-Atlassian-Token': 'no-check'
+    }
+    files = {
+        'file': (report_filename, open(report_filename, 'rb')),
+    }
+    response = requests.post(upload_endpoint, files=files, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD), headers=headers)
+
+    # Check if the upload was successful
+    if response.status_code == 200:
+        logging.info(f"Report {report_filename} successfully uploaded to Confluence.")
+        # Delete the local file after successful upload
+        os.remove(report_filename)
+    else:
+        logging.error(f"Failed to upload report {report_filename} to Confluence. Status code: {response.status_code}, Response: {response.text}")
+
+# Example of running the report generation and upload
+if __name__ == "__main__":
+    report = generate_status_report()
+    upload_to_confluence(report)
