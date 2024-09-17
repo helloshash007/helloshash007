@@ -1,0 +1,43 @@
+def generate_status_report():
+    logging.info("Generating status report for the last 24 hours...")
+    error_count = 0
+    warning_count = 0
+    info_count = 0
+    now = datetime.now()
+
+    with open("replication_monitor.log", "r") as log_file:
+        lines = log_file.readlines()
+        for line in lines:
+            timestamp_str = line.split(' ')[0]  # Split the line by space to get the timestamp
+            log_time = None
+            
+            # Try to parse the timestamp in different formats
+            try:
+                log_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                try:
+                    # If the format is only the date (without time), parse as date
+                    log_time = datetime.strptime(timestamp_str, "%Y-%m-%d")
+                except ValueError:
+                    # If parsing fails, log the issue and skip this line
+                    logging.warning(f"Skipping line due to invalid timestamp format: {line}")
+                    continue
+
+            # Check if the log is from the last 24 hours
+            if now - log_time <= timedelta(hours=24):
+                if 'ERROR' in line:
+                    error_count += 1
+                elif 'WARNING' in line:
+                    warning_count += 1
+                elif 'INFO' in line:
+                    info_count += 1
+
+    report = f"""
+    Replication Monitoring Status Report (Last 24 Hours)
+    ----------------------------------------------------
+    Errors: {error_count}
+    Warnings: {warning_count}
+    Infos: {info_count}
+    """
+    logging.info(report)
+    return report
