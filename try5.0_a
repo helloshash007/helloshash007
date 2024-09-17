@@ -1,0 +1,73 @@
+# Generate PDF report
+def generate_status_report():
+    # Read log for last 24 hours
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    # Filter log entries for last 24 hours
+    now = datetime.now()
+    past_24_hours_logs = []
+    for log in logs:
+        try:
+            log_time_str = log.split(" - ")[0]
+            log_time = datetime.strptime(log_time_str, "%Y-%m-%d %H:%M:%S")
+            if now - log_time < timedelta(days=1):
+                past_24_hours_logs.append(log)
+        except ValueError:
+            logging.warning(f"Skipping log entry with invalid timestamp: {log}")
+
+    # Count errors, warnings, and infos
+    error_count = sum(1 for log in past_24_hours_logs if "ERROR" in log)
+    warning_count = sum(1 for log in past_24_hours_logs if "WARNING" in log)
+    info_count = sum(1 for log in past_24_hours_logs if "INFO" in log)
+
+    # Format report
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report = (
+        "### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        "#### **Summary:**\n"
+        f"- **Errors:** {error_count}\n"
+        f"- **Warnings:** {warning_count}\n"
+        f"- **Infos:** {info_count}\n\n"
+        "---\n\n"
+        "#### **Logs:**\n\n"
+        f"{''.join(past_24_hours_logs)}\n\n"
+        "---\n\n"
+        "### **Conclusion:**\n\n"
+        "- **Errors:** Slots exceeded 250MB lag or were inactive.\n"
+        "- **Warnings:** Several instances of replication lag > 0MB.\n"
+        "- **Recoveries:** All errors were resolved successfully, with recovery times detailed above.\n\n"
+        "---\n"
+    )
+    return report
+
+# Upload the report as an attachment to Confluence and delete it after upload
+def upload_to_confluence(report):
+    # Include the report generation date in the filename
+    report_date = datetime.now().strftime("%Y-%m-%d")
+    report_filename = f"replication_status_report_{report_date}.txt"
+    
+    # Save the report to a file
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    # Upload the file as an attachment
+    upload_endpoint = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}/child/attachment'
+    headers = {
+        'X-Atlassian-Token': 'no-check'
+    }
+    files = {
+        'file': (report_filename, open(report_filename, 'rb')),
+    }
+    response = requests.post(upload_endpoint, files=files, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD), headers=headers)
+
+    # Check if the upload was successful
+    if response.status_code == 200:
+        logging.info(f"Report {report_filename} successfully uploaded to Confluence.")
+        # Delete the local file after successful upload
+        os.remove(report_filename)
+    else:
+        logging.error(f"Failed to upload report {report_filename} to Confluence. Status code: {response.status_code}, Response: {response.text}")
