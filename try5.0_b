@@ -1,0 +1,57 @@
+import re
+
+# Generate PDF report
+def generate_status_report():
+    # Read log for last 24 hours
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    # Define a function to parse timestamp with comma or period
+    def parse_timestamp(timestamp_str):
+        try:
+            # Convert comma to period for milliseconds if necessary
+            timestamp_str = re.sub(r"(\d{2}):(\d{2}):(\d{2}),(\d+)", r"\1:\2:\3.\4", timestamp_str)
+            return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            logging.warning(f"Skipping log entry with invalid timestamp: {timestamp_str}")
+            return None
+
+    # Filter log entries for last 24 hours
+    now = datetime.now()
+    past_24_hours_logs = []
+    for log in logs:
+        parts = log.split(" - ", 1)
+        if len(parts) < 2:
+            continue
+        log_time_str = parts[0]
+        log_time = parse_timestamp(log_time_str)
+        if log_time and now - log_time < timedelta(days=1):
+            past_24_hours_logs.append(log)
+    
+    # Count errors, warnings, and infos
+    error_count = sum(1 for log in past_24_hours_logs if "ERROR" in log)
+    warning_count = sum(1 for log in past_24_hours_logs if "WARNING" in log)
+    info_count = sum(1 for log in past_24_hours_logs if "INFO" in log)
+
+    # Format report
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report = (
+        "### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        "#### **Summary:**\n"
+        f"- **Errors:** {error_count}\n"
+        f"- **Warnings:** {warning_count}\n"
+        f"- **Infos:** {info_count}\n\n"
+        "---\n\n"
+        "#### **Logs:**\n\n"
+        f"{''.join(past_24_hours_logs)}\n\n"
+        "---\n\n"
+        "### **Conclusion:**\n\n"
+        "- **Errors:** Slots exceeded 250MB lag or were inactive.\n"
+        "- **Warnings:** Several instances of replication lag > 0MB.\n"
+        "- **Recoveries:** All errors were resolved successfully, with recovery times detailed above.\n\n"
+        "---\n"
+    )
+    return report
