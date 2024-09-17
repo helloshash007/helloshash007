@@ -55,3 +55,31 @@ def generate_status_report():
         "---\n"
     )
     return report
+
+# Upload the report as an attachment to Confluence and delete it after upload
+def upload_to_confluence(report):
+    # Include the report generation date and time in the filename
+    report_date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    report_filename = f"replication_status_report_{report_date_time}.txt"
+    
+    # Save the report to a file
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    # Upload the file as an attachment
+    upload_endpoint = f'{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}/child/attachment'
+    headers = {
+        'X-Atlassian-Token': 'no-check'
+    }
+    files = {
+        'file': (report_filename, open(report_filename, 'rb')),
+    }
+    response = requests.post(upload_endpoint, files=files, auth=(CONFLUENCE_USERNAME, CONFLUENCE_PASSWORD), headers=headers)
+
+    # Check if the upload was successful
+    if response.status_code == 200:
+        logging.info(f"Report {report_filename} successfully uploaded to Confluence.")
+        # Delete the local file after successful upload
+        os.remove(report_filename)
+    else:
+        logging.error(f"Failed to upload report {report_filename} to Confluence. Status code: {response.status_code}, Response: {response.text}")
