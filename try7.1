@@ -1,0 +1,58 @@
+# Generate status report
+def generate_status_report():
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    now = datetime.now()
+    past_24_hours_logs = []
+    for log in logs:
+        try:
+            log_time_str = log.split(" - ")[0]
+            log_time = datetime.strptime(log_time_str, "%Y-%m-%d %H:%M:%S")
+            if now - log_time < timedelta(days=1):
+                past_24_hours_logs.append(log)
+        except ValueError:
+            logging.warning(f"Skipping log entry with invalid timestamp: {log}")
+
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Count errors and warnings
+    error_count = len(error_log)
+    warning_count = len(warning_log)
+
+    report = (
+        f"### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        f"#### **Summary:**\n"
+        f"- **Total Errors:** {error_count}\n"
+        f"- **Total Warnings:** {warning_count}\n\n"
+        "#### **Errors and Warnings:**\n\n"
+    )
+
+    # Add recovery details for errors
+    for slot_name, details in error_log.items():
+        report += (
+            f"- **Slot {slot_name} Error:**\n"
+            f"  - **Start Time:** {details['start_time']}\n"
+            f"  - **Recovery Time:** {details.get('recovery_time', 'N/A')}\n"
+            f"  - **Duration:** {details.get('recovery_duration', 'N/A')}\n\n"
+        )
+
+    # Add recovery details for warnings
+    for slot_name, details in warning_log.items():
+        report += (
+            f"- **Slot {slot_name} Warning:**\n"
+            f"  - **Start Time:** {details['start_time']}\n"
+            f"  - **Recovery Time:** {details.get('recovery_time', 'N/A')}\n"
+            f"  - **Duration:** {details.get('recovery_duration', 'N/A')}\n\n"
+        )
+
+    # Write the report to a file
+    report_filename = f"replication_status_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    logging.info(f"Report generated: {report_filename}")
+    return report_filename
