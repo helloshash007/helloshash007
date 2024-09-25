@@ -1,0 +1,114 @@
+from datetime import datetime, timedelta
+import logging
+
+# Initialize logs for errors and warnings
+error_log = {}
+warning_log = {}
+
+# Setup logging configuration
+logging.basicConfig(filename='replication_monitor.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Function to generate the status report for the last 24 hours
+def generate_status_report():
+    now = datetime.now()
+    report_start_time = now - timedelta(hours=24)  # 24 hours from the current time
+
+    # Open the log file and filter out the relevant logs in the last 24 hours
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    relevant_logs = []
+
+    # Filter logs within the 24-hour period
+    for log in logs:
+        try:
+            log_time_str = log.split(" - ")[0].strip()
+            log_time = datetime.strptime(log_time_str, "%Y-%m-%d %H:%M:%S,%f")
+
+            # Only include logs from the last 24 hours
+            if report_start_time <= log_time <= now:
+                relevant_logs.append(log)
+        except ValueError as e:
+            logging.warning(f"Skipping log entry with invalid timestamp: {log.strip()} due to error: {e}")
+
+    # Current time for the report
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Count unrecovered errors and warnings
+    error_count = sum(1 for slot in error_log.values() if slot.get('recovery_time') is None)
+    warning_count = sum(1 for slot in warning_log.values() if slot.get('recovery_time') is None)
+
+    # Start building the report
+    report = (
+        f"### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        f"#### **Summary:**\n"
+        f"- **Total Errors:** {error_count}\n"
+        f"- **Total Warnings:** {warning_count}\n\n"
+        "#### **Errors and Warnings with Recovery Times:**\n\n"
+    )
+
+    # Add recovery details for errors
+    for slot_name, details in error_log.items():
+        recovery_time = details.get('recovery_time', 'Not Yet Recovered')
+        recovery_duration = details.get('recovery_duration', 'N/A')
+        report += (
+            f"- **Slot Name:** {slot_name}\n"
+            f"  - **Error Start Time:** {details.get('start_time', 'N/A')}\n"
+            f"  - **Recovery Time:** {recovery_time}\n"
+            f"  - **Duration:** {recovery_duration}\n\n"
+        )
+
+    # Add recovery details for warnings
+    for slot_name, details in warning_log.items():
+        recovery_time = details.get('recovery_time', 'Not Yet Recovered')
+        recovery_duration = details.get('recovery_duration', 'N/A')
+        report += (
+            f"- **Slot Name:** {slot_name}\n"
+            f"  - **Warning Start Time:** {details.get('start_time', 'N/A')}\n"
+            f"  - **Recovery Time:** {recovery_time}\n"
+            f"  - **Duration:** {recovery_duration}\n\n"
+        )
+
+    # Write the report to a file with current timestamp in the filename
+    report_filename = f"replication_status_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    logging.info(f"Report generated: {report_filename}")
+    return report_filename
+
+# Function to log an error or warning
+def log_event(slot_name, event_type, start_time):
+    log_entry = {
+        'start_time': start_time,
+        'recovery_time': None,
+        'recovery_duration': None,
+    }
+
+    if event_type == 'error':
+        error_log[slot_name] = log_entry
+    elif event_type == 'warning':
+        warning_log[slot_name] = log_entry
+
+# Function to log the recovery of an error or warning
+def log_recovery(slot_name, event_type, recovery_time):
+    if event_type == 'error' and slot_name in error_log:
+        details = error_log[slot_name]
+        details['recovery_time'] = recovery_time
+        details['recovery_duration'] = str(recovery_time - details['start_time'])
+        logging.info(f"Error recovered for Slot {slot_name} at {recovery_time}. Duration: {details['recovery_duration']}")
+    elif event_type == 'warning' and slot_name in warning_log:
+        details = warning_log[slot_name]
+        details['recovery_time'] = recovery_time
+        details['recovery_duration'] = str(recovery_time - details['start_time'])
+        logging.info(f"Warning recovered for Slot {slot_name} at {recovery_time}. Duration: {details['recovery_duration']}")
+
+# Example usage
+log_event('slot1', 'error', datetime(2024, 9, 18, 10, 0))
+log_recovery('slot1', 'error', datetime(2024, 9, 18, 11, 0))
+
+# Generate the report
+generate_status_report()
