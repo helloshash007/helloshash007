@@ -1,0 +1,68 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    service_name: "{{ service_name }}"  # This will be provided via the Survey or EXTRA VARIABLES in the Job Template
+    action: "{{ action }}"  # 'start', 'stop', or 'restart' will be provided via the Survey or EXTRA VARIABLES
+    change_to_path: "{{ change_to_path }}"  # Directory path provided via Survey or EXTRA VARIABLES
+
+  tasks:
+    - name: Change to the required directory and check if the service is running
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep"
+      args:
+        chdir: "{{ change_to_path }}"  # Change the working directory before running the command
+      register: service_status
+      ignore_errors: yes
+
+    - name: Start the service from the specified directory
+      shell: "your_service_start_command"  # Replace with the actual service start command
+      args:
+        chdir: "{{ change_to_path }}"  # Change the directory before running the start command
+      when: action == "start" and service_status.stdout == ""
+      register: start_output
+
+    - name: Check if the service started successfully
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep"
+      args:
+        chdir: "{{ change_to_path }}"  # Change the working directory before checking the status
+      when: action == "start" and service_status.stdout == ""
+      register: post_start_status
+      ignore_errors: yes
+
+    - name: Display message if service started successfully
+      debug:
+        msg: "Service {{ service_name }} started successfully with PID: {{ post_start_status.stdout_lines[0].split()[1] }}"
+      when: action == "start" and post_start_status.stdout != ""
+
+    - name: Stop the service from the specified directory
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep | awk '{print $2}' | xargs -r kill -9"
+      args:
+        chdir: "{{ change_to_path }}"  # Change the directory before running the stop command
+      when: action == "stop" or action == "restart"
+      register: stop_output
+      ignore_errors: yes
+
+    - name: Display message if the service stopped successfully
+      debug:
+        msg: "Service {{ service_name }} stopped successfully."
+      when: action == "stop" or action == "restart"
+
+    - name: Restart the service from the specified directory
+      shell: "your_service_start_command"  # Replace with the actual service start command
+      args:
+        chdir: "{{ change_to_path }}"  # Change the directory before restarting the service
+      when: action == "restart"
+      register: restart_output
+
+    - name: Check if the service restarted successfully
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep"
+      args:
+        chdir: "{{ change_to_path }}"  # Change the working directory before checking the status
+      when: action == "restart"
+      register: post_restart_status
+      ignore_errors: yes
+
+    - name: Display message if the service restarted successfully
+      debug:
+        msg: "Service {{ service_name }} restarted successfully with PID: {{ post_restart_status.stdout_lines[0].split()[1] }}"
+      when: action == "restart" and post_restart_status.stdout != ""
