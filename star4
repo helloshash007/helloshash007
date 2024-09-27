@@ -1,0 +1,84 @@
+---
+- hosts: all
+  become: yes
+  become_user: demo  # Run the tasks as the 'demo' user
+  vars:
+    service_name: "{{ service_name }}"  # Provided via Survey or EXTRA VARIABLES
+    action: "{{ action }}"  # 'start', 'stop', or 'restart' provided via Survey or EXTRA VARIABLES
+    java_home: "/path/to/java/home"  # Specify the correct Java home path
+    java_bin: "{{ java_home }}/bin"    # Automatically derive the Java bin directory from JAVA_HOME
+    retry_attempts: 2  # Retry 2 times (1 original attempt + 1 retry after waiting)
+
+  environment:
+    JAVA_HOME: "{{ java_home }}"
+    PATH: "{{ java_bin }}:{{ ansible_env.PATH }}"
+
+  tasks:
+    - name: Check if the service is running
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep"
+      args:
+        chdir: "/path/to/your/directory"  # Replace with the actual path where the commands should be executed
+      register: service_status
+      ignore_errors: yes
+
+    - name: Start the service
+      shell: "your_service_start_command"  # Replace with the actual service start command
+      args:
+        chdir: "/path/to/your/directory"  # Replace with the actual path
+      when: action == "start" and service_status.stdout == ""
+      register: start_output
+
+    - name: Check if the service started successfully
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep"
+      args:
+        chdir: "/path/to/your/directory"  # Replace with the actual path
+      when: action == "start"
+      register: post_start_status
+      retries: "{{ retry_attempts }}"  # Attempt to check the status (up to 2 attempts)
+      delay: 300  # Wait 5 minutes (300 seconds) before retrying
+      until: post_start_status.stdout != ""  # Continue retrying until the service starts
+
+    - name: Display message if waiting for retry
+      debug:
+        msg: "Service not started, waiting for 5 minutes to retry..."
+      when: action == "start" and post_start_status.stdout == "" and post_start_status.attempts < retry_attempts
+
+    - name: Display message if service started successfully
+      debug:
+        msg: "Service {{ service_name }} started successfully with PID: {{ post_start_status.stdout_lines[0].split()[1] }}"
+      when: action == "start" and post_start_status.stdout != ""
+
+    - name: Stop the service
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep | awk '{print $2}' | xargs -r kill -9"
+      args:
+        chdir: "/path/to/your/directory"  # Replace with the actual path
+      when: action == "stop" or action == "restart"
+      register: stop_output
+      ignore_errors: yes
+
+    - name: Display message if the service stopped successfully
+      debug:
+        msg: "Service {{ service_name }} stopped successfully."
+      when: action == "stop" or action == "restart"
+
+    - name: Restart the service
+      shell: "your_service_start_command"  # Replace with the actual service start command
+      args:
+        chdir: "/path/to/your/directory"  # Replace with the actual path
+      when: action == "restart"
+      register: restart_output
+
+    - name: Check if the service restarted successfully
+      shell: "ps -ef | grep {{ service_name }} | grep -v grep"
+      args:
+        chdir: "/path/to/your/directory"  # Replace with the actual path
+      when: action == "restart"
+      register: post_restart_status
+      retries: "{{ retry_attempts }}"  # Attempt to check the status (up to 2 attempts)
+      delay: 300  # Wait 5 minutes (300 seconds) before retrying
+      until: post_restart_status.stdout != ""
+
+    - name: Display message if service restarted successfully
+      debug:
+        msg: "Service {{ service_name }} restarted successfully with PID: {{ post_restart_status.stdout_lines[0].split()[1] }}"
+      when: action == "restart" and post_restart_status.stdout != ""
