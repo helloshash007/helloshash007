@@ -1,0 +1,114 @@
+import logging
+from datetime import datetime, timedelta
+import re
+import subprocess
+
+# Setup logging configuration
+logging.basicConfig(filename='replication_monitor.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Function to read logs for the last 24 hours
+def get_logs_from_last_24_hours():
+    now = datetime.now()
+    report_start_time = now - timedelta(hours=24)
+    
+    # List to store relevant logs from the last 24 hours
+    relevant_logs = []
+
+    # Read and filter logs based on timestamp
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    for log in logs:
+        try:
+            log_time_str = log.split(" - ")[0].strip()
+            log_time = datetime.strptime(log_time_str, "%Y-%m-%d %H:%M:%S,%f")
+
+            # Filter logs that fall within the last 24 hours
+            if report_start_time <= log_time <= now:
+                relevant_logs.append(log)
+        except ValueError as e:
+            logging.warning(f"Skipping log entry with invalid timestamp: {log.strip()} due to error: {e}")
+
+    return relevant_logs
+
+# Function to grep recovery information from logs
+def get_recovery_details_from_logs(slot_name):
+    try:
+        # Run the grep command to find all logs with recovery for the slot
+        grep_command = f"grep '{slot_name} recovered' replication_monitor.log"
+        result = subprocess.run(grep_command, shell=True, capture_output=True, text=True)
+
+        if result.returncode == 0:  # grep was successful
+            return result.stdout.strip()
+        else:
+            return None
+    except Exception as e:
+        logging.error(f"Failed to grep recovery details: {e}")
+        return None
+
+# Function to generate the status report for the last 24 hours
+def generate_status_report():
+    logs = get_logs_from_last_24_hours()
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Initialize error and warning counts
+    error_count = 0
+    warning_count = 0
+
+    # Start building the report
+    report = (
+        f"### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        f"#### **Summary:**\n"
+        f"- **Total Errors:** {error_count}\n"
+        f"- **Total Warnings:** {warning_count}\n\n"
+        "#### **Errors and Warnings with Recovery Times:**\n\n"
+    )
+
+    # Check for slot-related errors and warnings
+    slot_names = set()  # Use set to store unique slot names
+    for log in logs:
+        if 'ERROR' in log:
+            slot_name = re.search(r"Slot (\w+)", log).group(1)
+            slot_names.add(slot_name)
+            error_count += 1
+            report += f"- **Slot Name:** {slot_name} (Error)\n"
+        
+        elif 'WARNING' in log:
+            slot_name = re.search(r"Slot (\w+)", log).group(1)
+            slot_names.add(slot_name)
+            warning_count += 1
+            report += f"- **Slot Name:** {slot_name} (Warning)\n"
+
+    # Add recovery information for each slot
+    for slot_name in slot_names:
+        recovery_details = get_recovery_details_from_logs(slot_name)
+        if recovery_details:
+            report += (
+                f"  - **Recovery Details for Slot {slot_name}:**\n"
+                f"    {recovery_details}\n"
+            )
+        else:
+            report += f"  - **No recovery recorded for Slot {slot_name}.**\n"
+
+    # Write the report to a file with current timestamp in the filename
+    report_filename = f"replication_status_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    logging.info(f"Report generated: {report_filename}")
+    return report_filename
+
+# Function to log an error or warning
+def log_event(slot_name, event_type, start_time):
+    log_entry = {
+        'start_time': start_time,
+        'recovery_time': None,
+        'recovery_duration': None,
+    }
+
+# Example usage
+log_event('slot1', 'error', datetime(2024, 9, 18, 10, 0))
+generate_status_report()
