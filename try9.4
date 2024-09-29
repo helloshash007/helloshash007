@@ -1,0 +1,153 @@
+import logging
+from datetime import datetime, timedelta
+import re
+
+# Setup logging configuration
+logging.basicConfig(filename='replication_monitor.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Function to read logs for the last 24 hours
+def get_logs_from_last_24_hours():
+    now = datetime.now()
+    report_start_time = now - timedelta(hours=24)
+
+    # List to store relevant logs from the last 24 hours
+    relevant_logs = []
+
+    # Read and filter logs based on timestamp
+    with open("replication_monitor.log", "r") as log_file:
+        logs = log_file.readlines()
+
+    for log in logs:
+        try:
+            log_time_str = log.split(" - ")[0].strip()
+            # Parse the log timestamp
+            log_time = datetime.strptime(log_time_str, "%Y-%m-%d %H:%M:%S,%f")
+
+            # Filter logs that fall within the last 24 hours
+            if report_start_time <= log_time <= now:
+                relevant_logs.append(log)
+        except ValueError as e:
+            logging.warning(f"Skipping log entry with invalid timestamp: {log.strip()} due to error: {e}")
+
+    return relevant_logs
+
+# Function to parse logs and generate status report data
+def parse_logs(logs):
+    slot_logs = {}
+
+    # Regular expression to extract slot name from log messages
+    slot_name_pattern = re.compile(r'Slot\s*:? (\w+)')
+
+    for log in logs:
+        try:
+            parts = log.split(" - ")
+            timestamp_str, level, message = parts[0], parts[1], parts[2].strip()
+
+            # Extract slot name using the flexible regex
+            slot_name_match = slot_name_pattern.search(message)
+            if slot_name_match:
+                slot_name = slot_name_match.group(1)
+
+                # Initialize the slot entry if not already present
+                if slot_name not in slot_logs:
+                    slot_logs[slot_name] = {'errors': [], 'warnings': []}
+
+                if level == "ERROR":
+                    error_entry = {
+                        'start_time': timestamp_str,
+                        'recovery_time': None,
+                        'recovery_duration': None,
+                        'message': message
+                    }
+                    slot_logs[slot_name]['errors'].append(error_entry)
+
+                elif level == "WARNING":
+                    warning_entry = {
+                        'start_time': timestamp_str,
+                        'recovery_time': None,
+                        'recovery_duration': None,
+                        'message': message
+                    }
+                    slot_logs[slot_name]['warnings'].append(warning_entry)
+
+                # Log recovery if it's mentioned
+                if "recovered" in message:
+                    event_type = "errors" if "Error" in message else "warnings"
+                    for entry in slot_logs[slot_name][event_type]:
+                        if entry['recovery_time'] is None:  # Only log recovery if not already recovered
+                            entry['recovery_time'] = timestamp_str
+                            entry['recovery_duration'] = str(datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S,%f") - datetime.strptime(entry['start_time'], "%Y-%m-%d %H:%M:%S,%f"))
+                            break  # Stop after finding the first unrecovered event
+        except Exception as e:
+            logging.error(f"Failed to parse log entry: {log.strip()} due to error: {e}")
+            continue
+
+    return slot_logs
+
+# Function to generate the status report for the last 24 hours
+def generate_status_report():
+    logs = get_logs_from_last_24_hours()
+    slot_logs = parse_logs(logs)
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Initialize error and warning counts (including recovered)
+    error_count = sum([len(logs.get('errors', [])) for logs in slot_logs.values()])
+    warning_count = sum([len(logs.get('warnings', [])) for logs in slot_logs.values()])
+
+    # Start building the report
+    report = (
+        f"### **Replication Monitoring Status Report (Last 24 Hours)**\n\n"
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"**Report Generated At:** {current_time}\n\n"
+        "---\n\n"
+        f"#### **Summary:**\n"
+        f"- **Total Errors:** {error_count}\n"
+        f"- **Total Warnings:** {warning_count}\n\n"
+        "#### **Errors and Warnings with Recovery Times:**\n\n"
+    )
+
+    # Iterate over all slots to add details for errors and warnings (including recovered)
+    for slot_name, logs in slot_logs.items():
+        if logs.get('errors'):
+            report += f"**Slot Name: {slot_name}**\n\n"
+            for error in logs['errors']:
+                recovery_time = error.get('recovery_time', 'Not Yet Recovered')
+                recovery_duration = error.get('recovery_duration', 'N/A')
+                resolved_status = "Resolved" if recovery_time != "Not Yet Recovered" else "Unresolved"
+                
+                report += (
+                    f"- **Error Start Time:** {error.get('start_time', 'N/A')}\n"
+                    f"  - **Recovery Time:** {recovery_time}\n"
+                    f"  - **Duration:** {recovery_duration}\n"
+                    f"  - **Message:** {error.get('message', '')}\n"
+                    f"  - **Status:** {resolved_status}\n\n"
+                )
+
+        if logs.get('warnings'):
+            for warning in logs['warnings']:
+                recovery_time = warning.get('recovery_time', 'Not Yet Recovered')
+                recovery_duration = warning.get('recovery_duration', 'N/A')
+                resolved_status = "Resolved" if recovery_time != "Not Yet Recovered" else "Unresolved"
+
+                report += (
+                    f"- **Warning Start Time:** {warning.get('start_time', 'N/A')}\n"
+                    f"  - **Recovery Time:** {recovery_time}\n"
+                    f"  - **Duration:** {recovery_duration}\n"
+                    f"  - **Message:** {warning.get('message', '')}\n"
+                    f"  - **Status:** {resolved_status}\n\n"
+                )
+
+    # If there are no relevant logs, add a message stating that
+    if error_count == 0 and warning_count == 0:
+        report += "*No errors or warnings were logged in the past 24 hours.*\n"
+
+    # Write the report to a file with current timestamp in the filename
+    report_filename = f"replication_status_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(report_filename, "w") as report_file:
+        report_file.write(report)
+
+    logging.info(f"Report generated: {report_filename}")
+    return report_filename
+
+# Example of generating the status report
+generate_status_report()
