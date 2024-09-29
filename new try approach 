@@ -1,0 +1,202 @@
+import re
+import logging
+from datetime import datetime, timedelta
+import subprocess
+import os
+
+# Set up logging
+logging.basicConfig(filename='replication_monitor.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+# In-memory tracking of slot states
+slot_states = {}
+
+# Utility to run SQL queries
+def run_sql_query(query):
+    """ Runs the SQL query on the database and returns the result """
+    # Here, replace with actual database connection and query execution
+    return [
+        {'slot_name': 'slot1', 'target_lag': 200, 'confirmed_flush_lsn': 'LSN_1'},
+        {'slot_name': 'slot2', 'target_lag': 50, 'confirmed_flush_lsn': 'LSN_2'}
+    ]
+
+# Parse each line in the log
+def parse_log_line(line):
+    """
+    Parse a single line of log for errors, warnings, and recovery events.
+    """
+    timestamp_str = line.split(' - ')[0]
+    try:
+        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
+    except ValueError:
+        logging.warning(f"Skipping log entry with invalid timestamp: {timestamp_str}")
+        return None, None, None, None
+    
+    log_level = line.split(' - ')[1].strip()
+    message = line.split(' - ')[2].strip()
+    
+    # Extract slot name
+    slot_match = re.search(r'Slot\s*:? (\w+)', message)
+    slot_name = slot_match.group(1) if slot_match else None
+    
+    return timestamp, log_level, message, slot_name
+
+# Update slot states
+def update_slot_state(slot_name, timestamp, log_level, message):
+    """
+    Update the state of the slot based on the log entry.
+    """
+    if slot_name not in slot_states:
+        slot_states[slot_name] = {
+            'error': None,
+            'warning': None,
+            'recovery_time': None,
+            'recovery_duration': None,
+            'resolved': False
+        }
+    
+    if log_level == 'ERROR' and 'recovered' not in message:
+        # Log an error start time
+        slot_states[slot_name]['error'] = timestamp
+        slot_states[slot_name]['resolved'] = False
+    elif log_level == 'WARNING' and 'recovered' not in message:
+        # Log a warning start time
+        slot_states[slot_name]['warning'] = timestamp
+        slot_states[slot_name]['resolved'] = False
+    elif 'recovered' in message:
+        # Mark recovery time and calculate duration
+        if slot_states[slot_name]['error'] or slot_states[slot_name]['warning']:
+            slot_states[slot_name]['recovery_time'] = timestamp
+            start_time = slot_states[slot_name]['error'] or slot_states[slot_name]['warning']
+            slot_states[slot_name]['recovery_duration'] = str(timestamp - start_time)
+            slot_states[slot_name]['resolved'] = True
+
+# Generate the final report
+def generate_report():
+    """
+    Generate the status report based on the slot states.
+    """
+    report = ""
+    error_count = 0
+    warning_count = 0
+    
+    for slot_name, state in slot_states.items():
+        if state['error'] or state['warning']:
+            recovery_time = state['recovery_time'] or "Not Yet Recovered"
+            resolved_status = "Resolved" if state['resolved'] else "Unresolved"
+            start_time = state['error'] or state['warning']
+            recovery_duration = state['recovery_duration'] or "N/A"
+            
+            report += (
+                f"**Slot Name: {slot_name}**\n"
+                f"  - **Start Time:** {start_time}\n"
+                f"  - **Recovery Time:** {recovery_time}\n"
+                f"  - **Recovery Duration:** {recovery_duration}\n"
+                f"  - **Status:** {resolved_status}\n\n"
+            )
+
+            if state['error']:
+                error_count += 1
+            elif state['warning']:
+                warning_count += 1
+    
+    report_summary = (
+        f"**Error Count:** {error_count}\n"
+        f"**Warning Count:** {warning_count}\n"
+    )
+    
+    report = report_summary + report
+    return report
+
+# Check if the copy script is running
+def is_copy_script_running():
+    """ Check if copy.py is running, and if not, start it in the background """
+    result = subprocess.run(['pgrep', '-f', 'copy.py'], stdout=subprocess.PIPE)
+    if not result.stdout:
+        logging.info("Starting copy.py in the background.")
+        subprocess.Popen(['python3', 'copy.py'])
+
+# Process the log lines
+def process_logs(log_lines):
+    """
+    Process all log lines to update slot states and generate the report.
+    """
+    for line in log_lines:
+        timestamp, log_level, message, slot_name = parse_log_line(line)
+        if slot_name:
+            update_slot_state(slot_name, timestamp, log_level, message)
+
+    # Generate the report
+    return generate_report()
+
+# Monitor replication slots
+def monitor_replication_slots():
+    """
+    Main function to monitor replication slots, detect errors, recoveries, and run the copy script.
+    """
+    # Fetch replication slots status from the database
+    replication_slots = run_sql_query("SELECT * FROM pg_replication_slots WHERE slot_type='logical'")
+    
+    for slot in replication_slots:
+        slot_name = slot['slot_name']
+        target_lag = slot['target_lag']
+        
+        # Check if target lag is greater than threshold and log a warning or error
+        if target_lag > 250:
+            logging.error(f"Slot : {slot_name} - replication lag {target_lag}MB exceeds threshold")
+        elif target_lag > 0:
+            logging.warning(f"Slot : {slot_name} - replication lag {target_lag}MB detected")
+        else:
+            logging.info(f"Slot : {slot_name} - replication lag is normal")
+
+# Read log file for last 24 hours
+def read_logs_for_last_24_hours(log_file):
+    """
+    Read logs for the last 24 hours.
+    """
+    logs = []
+    now = datetime.now()
+    cutoff_time = now - timedelta(hours=24)
+    
+    with open(log_file, 'r') as f:
+        for line in f:
+            timestamp_str = line.split(' - ')[0]
+            try:
+                log_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
+                if log_time >= cutoff_time:
+                    logs.append(line)
+            except ValueError:
+                continue
+    
+    return logs
+
+# Generate and upload the report to Confluence
+def upload_report(report_content, confluence_page_id, username, password):
+    """ Upload the report to Confluence """
+    report_file = f'replication_status_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
+    
+    # Save report content to file
+    with open(report_file, 'w') as f:
+        f.write(report_content)
+    
+    # Call Confluence API to upload (implement using requests or any other library)
+    # Simulate uploading
+    logging.info(f"Uploading report {report_file} to Confluence")
+    os.remove(report_file)  # Remove report file after successful upload
+
+if __name__ == '__main__':
+    # Read logs and generate the report
+    log_file = 'replication_monitor.log'
+    log_lines = read_logs_for_last_24_hours(log_file)
+    report_content = process_logs(log_lines)
+    
+    # Upload the report to Confluence
+    upload_report(report_content, confluence_page_id="12345", username="your_username", password="your_password")
+    
+    # Monitor replication slots continuously and log status
+    monitor_replication_slots()
+    
+    # Check every 5 minutes if the copy script needs to run
+    while True:
+        is_copy_script_running()
+        time.sleep(300)  # Sleep for 5 minutes
