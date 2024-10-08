@@ -1,0 +1,38 @@
+import os
+import shutil
+
+# Source and destination directories
+src_dir = '/path/to/source/directory'  # Replace with your source directory path
+dst_dir = '/path/to/destination/directory'  # Replace with your destination directory path
+
+# Constants for renaming
+PUK = "PUK122222"
+G = "G123444"
+
+def rename_and_move_files(src_dir, dst_dir):
+    # Make sure destination directory exists
+    os.makedirs(dst_dir, exist_ok=True)
+
+    # Iterate over all files in the source directory
+    for filename in os.listdir(src_dir):
+        # Full path of the file
+        file_path = os.path.join(src_dir, filename)
+        
+        # Check if it's a file (not a directory)
+        if os.path.isfile(file_path):
+            # Rename the file
+            new_filename = f"{PUK}_{G}_{filename}"
+            new_file_path = os.path.join(dst_dir, new_filename)
+            
+            # Move the file
+            shutil.move(file_path, new_file_path)
+            
+            # Create the corresponding .ok file
+            ok_file_path = new_file_path + ".ok"
+            with open(ok_file_path, 'w') as ok_file:
+                ok_file.write(f"File {new_filename} moved successfully.")
+            
+            print(f"Renamed and moved: {new_filename}, .ok file created.")
+
+# Call the function
+rename_and_move_files(src_dir, dst_dir)
