@@ -1,0 +1,33 @@
+---
+- name: Control a service (start/stop/restart)
+  hosts: all
+  become: yes
+  vars:
+    service_name: "{{ service_name }}"
+    service_action: "{{ action }}"
+
+  tasks:
+    - name: Stop the service (for restart only)
+      ansible.builtin.service:
+        name: "{{ service_name }}"
+        state: stopped
+      when: service_action == "restart"
+      register: stop_result
+
+    - name: Wait for the service to stop completely (for restart)
+      wait_for:
+        path: "/var/run/{{ service_name }}.pid"
+        state: absent
+        timeout: 30
+      when: service_action == "restart"
+      register: wait_stop_result
+
+    - name: Start the service
+      ansible.builtin.service:
+        name: "{{ service_name }}"
+        state: "{{ 'started' if service_action == 'start' or service_action == 'restart' else service_action }}"
+      register: service_result
+
+    - name: Show service status
+      debug:
+        msg: "Service {{ service_name }} {{ service_action }} completed with result: {{ service_result }}"
