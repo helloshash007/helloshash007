@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# Check required environment variables
+: "${ENVIRONMENT:?Environment variable ENVIRONMENT is required}"
+: "${Manifest_Path:?Environment variable Manifest_Path is required}"
+: "${VAULT_TOKEN:?Environment variable VAULT_TOKEN is required}"
+: "${IDP_USER:?Environment variable IDP_USER is required}"
+: "${IDP_PASSWORD:?Environment variable IDP_PASSWORD is required}"
+
+echo "Environment: $ENVIRONMENT"
+echo "Manifest Path: $Manifest_Path"
+
+# Define other necessary variables
+vault_url="<your_vault_url_here>"
+idpapi="<your_idp_api_url_here>"
+jqCli="<path_to_jq>"
+kubectlCli="<path_to_kubectl>"
+apiserver="<your_kubernetes_api_server>"
+
+# Login Stage
+echo "Starting login stage..."
+
+occc_certs=$(curl -sk -H "X-Vault-Token: ${VAULT_TOKEN}" -X GET "${vault_url}/a/Automation/bccb")
+apicert=$(${jqCli} -r '.abc.apicert' <<< "$occc_certs")
+idpcert=$(${jqCli} -r '.abc.idpcert' <<< "$occc_certs")
+
+oidc_temp=$(curl -sk -u "${IDP_USER}:${IDP_PASSWORD}" -X GET "${idpapi}")
+oidc_id_token=$(${jqCli} -r '.token."id_token"' <<< "$oidc_temp")
+oidc_refresh_token=$(${jqCli} -r '.token."refresh_token"' <<< "$oidc_temp")
+
+echo "${apicert}" | base64 -d > ./tmp_cert
+${kubectlCli} config --kubeconfig=./kubeconfig set-cluster kubernetes \
+    --server="${apiserver}" \
+    --certificate-authority=./tmp_cert \
+    --embed-certs=true
+
+echo "Login stage completed successfully!"
