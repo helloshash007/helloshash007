@@ -1,0 +1,68 @@
+---
+- name: Jenkins Pipeline Tasks
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vault_url: "{{ vault_url | default('https://your_vault_url_here') }}"
+    idpapi: "{{ idpapi | default('https://your_idp_api_url_here') }}"
+    apiserver: "{{ apiserver | default('https://your_kubernetes_api_server') }}"
+    kubeconfig_path: "./kubeconfig"
+    tmp_cert_path: "./tmp_cert"
+
+  tasks:
+    - name: Fetch credentials from Vault
+      uri:
+        url: "{{ vault_url }}/a/Automation/bccb"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        return_content: yes
+        validate_certs: no
+      register: occc_certs_response
+      no_log: true
+
+    - name: Parse API cert from Vault response
+      set_fact:
+        apicert: "{{ (occc_certs_response.json.abc.apicert | b64decode) | string }}"
+        idpcert: "{{ (occc_certs_response.json.abc.idpcert | b64decode) | string }}"
+
+    - name: Fetch OIDC tokens using IDP credentials
+      uri:
+        url: "{{ idpapi }}"
+        method: GET
+        url_username: "{{ lookup('env', 'IDP_USER') }}"
+        url_password: "{{ lookup('env', 'IDP_PASSWORD') }}"
+        return_content: yes
+        validate_certs: no
+      register: oidc_response
+      no_log: true
+
+    - name: Parse ID Token and Refresh Token from OIDC response
+      set_fact:
+        oidc_id_token: "{{ oidc_response.json.token.id_token }}"
+        oidc_refresh_token: "{{ oidc_response.json.token.refresh_token }}"
+
+    - name: Store API cert in a temporary file
+      copy:
+        content: "{{ apicert }}"
+        dest: "{{ tmp_cert_path }}"
+        mode: '0600'
+
+    - name: Configure Kubernetes cluster
+      command: >
+        kubectl config --kubeconfig={{ kubeconfig_path }}
+        set-cluster kubernetes
+        --server={{ apiserver }}
+        --certificate-authority={{ tmp_cert_path }}
+        --embed-certs=true
+
+    - name: Clean up temporary certificate file
+      file:
+        path: "{{ tmp_cert_path }}"
+        state: absent
+
+    - name: Display environment and manifest path
+      debug:
+        msg:
+          - "Environment: {{ lookup('env', 'ENVIRONMENT') }}"
+          - "Manifest Path: {{ lookup('env', 'Manifest_Path') }}"
