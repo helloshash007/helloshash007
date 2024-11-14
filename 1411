@@ -1,0 +1,1 @@
+sed -i 's|\${DOCKER_IMG}|nexus3.systems:443/abc-123-we/qwe-stp-as:0.0.111.10|g' <file_name>
