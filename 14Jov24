@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Set variables
+USERNAME="your_username"
+PASSWORD="your_password"
+REPO_URL="https://github.com/username/repository.git"
+BRANCH="main"
+REPO_DIR="repository"
+FILE_PATH="path/to/your/file.yaml"
+
+# Clone the repository with authentication
+git clone https://"$USERNAME":"$PASSWORD"@github.com/username/repository.git "$REPO_DIR"
+
+# Navigate to the repository
+cd "$REPO_DIR" || exit
+
+# Checkout the specified branch and pull the latest changes
+git checkout "$BRANCH"
+git pull origin "$BRANCH"
+
+# Modify the file
+sed -i 's/old_text/new_text/g' "$FILE_PATH"
+
+# Deploy using kubectl
+kubectl apply -f "$FILE_PATH"
