@@ -7,3 +7,9 @@ kubectl config set-cluster <cluster-name> --server=<api-url>
 kubectl config set-credentials <user> --token=<your-token>
 kubectl config set-context <context-name> --cluster=<cluster-name> --user=<user>
 kubectl config use-context <context-name>
+
+kubectl create secret docker-registry nexus-docker-secret \
+  --docker-server=<nexus-registry-url> \
+  --docker-username=<nexus-username> \
+  --docker-password=<nexus-password> \
+  --docker-email=<email>
