@@ -2,3 +2,8 @@ sed -i 's|\${DOCKER_IMG}|nexus3.systems:443/abc-123-we/qwe-stp-as:0.0.111.10|g' 
 
 
 sed -i 's/${DOCKER_IMG}/nexus3.systems:443\/abc-123-we\/qwe-stp-as:0.0.111.10/g' config.yaml
+
+kubectl config set-cluster <cluster-name> --server=<api-url>
+kubectl config set-credentials <user> --token=<your-token>
+kubectl config set-context <context-name> --cluster=<cluster-name> --user=<user>
+kubectl config use-context <context-name>
