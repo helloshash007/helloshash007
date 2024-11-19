@@ -1,0 +1,52 @@
+---
+- name: Deploy microservice using Ansible
+  hosts: localhost
+  vars:
+    # Variables defined in the playbook
+    git_repo_url: "https://your-repo-url.git"
+    kube_manifest_path: "/path/to/deploy.yaml"
+    kubectl_context: "your-k8s-context"
+    deployment_namespace: "default"
+
+  tasks:
+    - name: Gather Jenkins environment variables
+      set_fact:
+        jenkins_token: "{{ lookup('env', 'JENKINS_TOKEN') }}"
+        jenkins_username: "{{ lookup('env', 'JENKINS_USERNAME') }}"
+        jenkins_password: "{{ lookup('env', 'JENKINS_PASSWORD') }}"
+
+    - name: Debug Jenkins environment variables (optional, remove for security)
+      debug:
+        msg:
+          - "Token: {{ jenkins_token }}"
+          - "Username: {{ jenkins_username }}"
+          - "Password: {{ jenkins_password }}"
+
+    - name: Clone Git repository using Jenkins credentials
+      git:
+        repo: "{{ git_repo_url }}"
+        dest: /tmp/microservice
+        version: main
+        update: yes
+        force: yes
+        username: "{{ jenkins_username }}"
+        password: "{{ jenkins_password }}"
+
+    - name: Run custom Unix shell commands
+      shell: |
+        echo "Executing Unix commands"
+        ls -l /tmp/microservice
+      register: unix_commands_output
+
+    - name: Display Unix commands output
+      debug:
+        var: unix_commands_output.stdout_lines
+
+    - name: Apply Kubernetes manifests using kubectl
+      shell: |
+        kubectl apply -f {{ kube_manifest_path }} --context {{ kubectl_context }} -n {{ deployment_namespace }}
+      register: kubectl_output
+
+    - name: Display kubectl output
+      debug:
+        var: kubectl_output.stdout_lines
