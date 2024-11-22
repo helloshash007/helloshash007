@@ -1,0 +1,104 @@
+import os
+
+def shell_to_ansible_with_vars(shell_script_path, ansible_playbook_path):
+    """
+    Converts a shell script into an Ansible playbook with variables.
+
+    :param shell_script_path: Path to the shell script.
+    :param ansible_playbook_path: Path to save the generated Ansible playbook.
+    """
+    def parse_command(command, vars_dict):
+        """
+        Maps shell commands to corresponding Ansible tasks with modules.
+        Updates vars_dict for reusable variables.
+        """
+        if command.startswith("yum install"):
+            pkg = command.split("install")[1].strip().split(" ")[0]
+            vars_dict["packages"].add(pkg)
+            return f"""    - name: Install package {pkg}
+      yum:
+        name: "{{{{ item }}}}"
+        state: present
+      loop: "{{{{ packages }}}}" """
+
+        elif command.startswith("yum update"):
+            return """    - name: Update all packages
+      yum:
+        name: "*"
+        state: latest"""
+
+        elif command.startswith("systemctl start"):
+            service = command.split("start")[1].strip()
+            vars_dict["services_to_start"].add(service)
+            return f"""    - name: Start service {service}
+      service:
+        name: "{{{{ item }}}}"
+        state: started
+      loop: "{{{{ services_to_start }}}}" """
+
+        elif command.startswith("systemctl enable"):
+            service = command.split("enable")[1].strip()
+            vars_dict["services_to_enable"].add(service)
+            return f"""    - name: Enable service {service}
+      service:
+        name: "{{{{ item }}}}"
+        enabled: yes
+      loop: "{{{{ services_to_enable }}}}" """
+
+        elif command.startswith("echo"):
+            message = command.split("echo")[1].strip().strip('"')
+            return f"""    - name: Print message
+      debug:
+        msg: "{message}" """
+
+        else:
+            # Fallback to the shell module for unrecognized commands
+            return f"""    - name: Execute shell command: {command}
+      shell: |
+        {command}"""
+
+    try:
+        # Read the shell script
+        with open(shell_script_path, "r") as shell_script:
+            lines = shell_script.readlines()
+
+        vars_dict = {"packages": set(), "services_to_start": set(), "services_to_enable": set()}
+        tasks = []
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):  # Skip empty lines and comments
+                continue
+
+            task = parse_command(line, vars_dict)
+            tasks.append(task)
+
+        # Prepare the playbook
+        ansible_playbook = []
+        ansible_playbook.append("- hosts: all")
+
+        # Add variables
+        ansible_playbook.append("  vars:")
+        if vars_dict["packages"]:
+            ansible_playbook.append(f"    packages: {list(vars_dict['packages'])}")
+        if vars_dict["services_to_start"]:
+            ansible_playbook.append(f"    services_to_start: {list(vars_dict['services_to_start'])}")
+        if vars_dict["services_to_enable"]:
+            ansible_playbook.append(f"    services_to_enable: {list(vars_dict['services_to_enable'])}")
+
+        # Add tasks
+        ansible_playbook.append("  tasks:")
+        ansible_playbook.extend(tasks)
+
+        # Write the Ansible playbook
+        with open(ansible_playbook_path, "w") as ansible_file:
+            ansible_file.write("\n".join(ansible_playbook))
+        print(f"Ansible playbook generated at {ansible_playbook_path}")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+# Example usage
+shell_script_path = "example.sh"  # Replace with the path to your shell script
+ansible_playbook_path = "playbook.yml"  # Replace with the desired playbook path
+shell_to_ansible_with_vars(shell_script_path, ansible_playbook_path)
