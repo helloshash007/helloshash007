@@ -1,0 +1,111 @@
+---
+- name: Deploy application with logging
+  hosts: localhost
+  gather_facts: no
+  vars:
+    log_file: "logs/deployment.log"
+    git_username: "{{ lookup('env', 'GIT_USERNAME') }}"
+    git_password: "{{ lookup('env', 'GIT_PASSWORD') }}"
+    repo_name: "example_repo"
+    service: "example_service"
+    version: "1.0.0"
+    vault_url: "https://lgls-vault.apix.cloud"
+    hashi_token: "123dhdhdhdhdhdhdhhdhd"
+    api_server: "https://userapi-apix.cloud"
+    pipissuer: "https://ciod.apix.cloud/auth/pip/k8spip"
+    kubectl_username: "{{ lookup('env', 'KUBECTL_USERNAME') }}"
+    ciod_id_token: "example_id_token"
+    ciod_refresh_token: "example_refresh_token"
+
+  pre_tasks:
+    - name: Ensure log directory exists
+      ansible.builtin.file:
+        path: logs
+        state: directory
+
+    - name: Initialize log file
+      ansible.builtin.command:
+        cmd: "echo 'Deployment started at {{ ansible_date_time.iso8601 }}' > {{ log_file }}"
+
+  tasks:
+    - name: Clone Git repository
+      ansible.builtin.git:
+        repo: "https://{{ git_username }}:{{ git_password }}@github.systems.com/{{ repo_name }}.git"
+        dest: "/tmp/{{ repo_name }}"
+        version: master
+      register: git_result
+      tags: git
+
+    - name: Log git clone result
+      ansible.builtin.lineinfile:
+        path: "{{ log_file }}"
+        line: "Git clone result: {{ git_result }}"
+
+    - name: Update Docker image in YAML manifest
+      ansible.builtin.lineinfile:
+        path: "/tmp/{{ repo_name }}/IKP_Configuration/{{ service }}/manifests/dev/deploy.yaml"
+        regexp: "DOCKER_IMG"
+        line: "nexus:8080/abc-voda/{{ service }}:{{ version }}"
+      register: yaml_update_result
+      tags: update_yaml
+
+    - name: Log manifest update
+      ansible.builtin.lineinfile:
+        path: "{{ log_file }}"
+        line: "YAML Update Result: {{ yaml_update_result }}"
+
+    - name: Fetch certificates from Vault
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/Automation/jenkins"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ hashi_token }}"
+        return_content: yes
+      register: vault_result
+
+    - name: Log Vault response
+      ansible.builtin.lineinfile:
+        path: "{{ log_file }}"
+        line: "Vault API response: {{ vault_result.content | default('No response') }}"
+
+    - name: Decode API certificate
+      ansible.builtin.shell:
+        cmd: "echo '{{ vault_result.json.data.apicert }}' | base64 -d > /tmp/tmp_cert"
+      tags: certs
+
+    - name: Configure Kubernetes
+      block:
+        - name: Set Kubernetes cluster
+          ansible.builtin.shell:
+            cmd: "kubectl config set-cluster kubernetes --server={{ api_server }} --certificate-authority=/tmp/tmp_cert --embed-certs=true"
+
+        - name: Set Kubernetes credentials
+          ansible.builtin.shell:
+            cmd: |
+              kubectl config set-credentials {{ kubectl_username }} \
+                --auth-provider=oidc \
+                --auth-provider-arg=idp-issuer-url={{ pipissuer }} \
+                --auth-provider-arg=client-id=kubernetes \
+                --auth-provider-arg=id-token={{ ciod_id_token }} \
+                --auth-provider-arg=refresh-token={{ ciod_refresh_token }}
+
+        - name: Use Kubernetes context
+          ansible.builtin.shell:
+            cmd: "kubectl config use-context kubernetes"
+      tags: kubectl
+
+    - name: Apply Kubernetes manifest
+      ansible.builtin.shell:
+        cmd: "kubectl apply -f /tmp/{{ repo_name }}/IKP_Configuration/{{ service }}/manifests/dev/deploy.yaml"
+      tags: deploy
+
+    - name: Log deployment success
+      ansible.builtin.lineinfile:
+        path: "{{ log_file }}"
+        line: "Deployment completed for service {{ service }} with version {{ version }}"
+
+  post_tasks:
+    - name: Log deployment completion
+      ansible.builtin.lineinfile:
+        path: "{{ log_file }}"
+        line: "Deployment completed at {{ ansible_date_time.iso8601 }}"
