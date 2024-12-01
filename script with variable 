@@ -1,0 +1,39 @@
+---
+- name: Create directory, download script, and run with variables
+  hosts: target_servers
+  become: yes
+  vars_prompt:
+    - name: "username"
+      prompt: "Enter the username"
+      private: no
+    - name: "password"
+      prompt: "Enter the password"
+      private: yes
+    - name: "service_name"
+      prompt: "Enter the service name"
+      private: no
+    - name: "environment"
+      prompt: "Enter the environment (e.g., dev, prod)"
+      private: no
+  tasks:
+    - name: Create directory with service name
+      file:
+        path: "/opt/{{ service_name }}"
+        state: directory
+        mode: '0755'
+
+    - name: Download the script
+      get_url:
+        url: "http://example.com/path/to/script.sh"
+        dest: "/opt/{{ service_name }}/script.sh"
+        mode: '0755'
+
+    - name: Run the script with variables
+      command: >
+        /bin/bash /opt/{{ service_name }}/script.sh
+        --username {{ username }}
+        --password {{ password }}
+        --service {{ service_name }}
+        --environment {{ environment }}
+      args:
+        chdir: "/opt/{{ service_name }}"
