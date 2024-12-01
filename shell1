@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Validate inputs
+if [[ $# -ne 4 ]]; then
+    echo "Usage: $0 <username> <password> <service_name> <environment>"
+    exit 1
+fi
+
+# Assign arguments to variables
+USERNAME="$1"
+PASSWORD="$2"
+SERVICE_NAME="$3"
+ENVIRONMENT="$4"
+
+# Main script logic
+REPO_URL="https://git.example.com/${SERVICE_NAME}.git"
+WORK_DIR="/opt/${SERVICE_NAME}/${ENVIRONMENT}"
+
+echo "Starting artifact download..."
+echo "Repository: $REPO_URL"
+echo "Environment: $ENVIRONMENT"
+echo "Creating working directory: $WORK_DIR"
+
+# Create directory for the service and environment
+mkdir -p "$WORK_DIR"
+
+# Clone the repository using the provided credentials
+echo "Cloning the repository..."
+GIT_URL="https://${USERNAME}:${PASSWORD}@git.example.com/${SERVICE_NAME}.git"
+git clone "$GIT_URL" "$WORK_DIR"
+
+if [[ $? -eq 0 ]]; then
+    echo "Artifact downloaded successfully to $WORK_DIR."
+else
+    echo "Failed to download artifact. Please check the credentials and repository URL."
+    exit 1
+fi
