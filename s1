@@ -7,3 +7,5 @@ sed -i 's/\bcpu\|mem=[0-9][0-9]*[a-zA-Z]*/\1="\2"/g' your_file.yaml
 sed -i 's/\bcpu\|mem=[0-9][0-9]*[a-zA-Z]*/\1="\2"/g' your_file.yaml
 
 sed -i 's/cpu\|mem=[0-9][0-9]*[a-zA-Z]*/\1="\2"/g' your_file.yaml
+
+awk '{gsub(/cpu=([0-9]+[a-zA-Z]*)/, "cpu=\"\\1\""); gsub(/mem=([0-9]+[a-zA-Z]*)/, "mem=\"\\1\""); print}' your_file.yaml > temp_file.yaml && mv temp_file.yaml your_file.yaml
