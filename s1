@@ -1,3 +1,5 @@
 grep -E '\b(cpu|mem)=[0-9]+[a-z]{1,2}' your_file.yaml
 
 sed -i 's/\bcpu\|mem=[0-9]\+[a-z]\{1,2\}/\1="\2"/g' your_file.yaml
+
+sed -i 's/\bcpu\|mem=[0-9][0-9]*[a-zA-Z]*/\1="\2"/g' your_file.yaml
