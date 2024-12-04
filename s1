@@ -1,5 +1,5 @@
 
-
+sed -i -E 's/(\s)(lot size|sleep time sec|recovery time sec|linger ms|batch size kB|request timeout ms): ([^"]+)/\1\2: "\3"/g' config.yaml
 sed -i -E 's/(\s)(cpu|memory): ([0-9]+[a-zA-Z]*)/\1\2: "\3"/g' deployment.yaml
 
 
