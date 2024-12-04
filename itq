@@ -1,0 +1,26 @@
+---
+- name: Troubleshoot environment variable
+  hosts: localhost
+  vars:
+    environment: "emigration"
+    version: "0.0.127.18"
+    hashi_vault: "as.rdtu.dffffff"
+    vailt_token: "as.rffrfff"
+  tasks:
+    - name: Debug the environment variable
+      debug:
+        msg: "Environment: {{ environment }}"
+
+    - name: Debug the version variable
+      debug:
+        msg: "Version: {{ version }}"
+
+    - name: Run shell script with variables
+      ansible.builtin.shell: >
+        /bin/bash /home/test.sh "{{ username }}" "{{ password }}" "{{ service_name }}"
+        "{{ environment }}" "{{ version }}" "{{ hashi_vault }}" "{{ vailt_token }}"
+      register: status
+
+    - name: Debug stdout_lines output
+      debug:
+        var: status.stdout_lines | default([])
