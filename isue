@@ -1,0 +1,8 @@
+---
+- name: Run shell script with parameters
+  hosts: localhost
+  tasks:
+    - name: Execute shell script with variables
+      ansible.builtin.command: >
+        /bin/bash /home/test.sh "{{ username }}" "{{ password }}" "{{ service_name }}"
+        "{{ environment }}" "{{ version }}" "{{ hashi_vaul }}" "{{ vailt_token }}"
