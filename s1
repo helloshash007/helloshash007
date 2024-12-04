@@ -1,5 +1,23 @@
 
 
+- name: Debug variables
+  debug:
+    msg: >
+      Running script with:
+      username={{ username }},
+      password={{ password }},
+      service_name={{ service_name }},
+      environment={{ environment }},
+      version={{ version }},
+      hashi_vaul={{ hashi_vaul }},
+      vailt_token={{ vailt_token }}
+
+
+
+
+
+
+
 #!/bin/bash
 
 # Path to the config.yaml file
