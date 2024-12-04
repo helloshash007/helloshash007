@@ -1,3 +1,17 @@
+
+
+sed -i -E 's/(\s)(cpu|memory): ([0-9]+[a-zA-Z]*)/\1\2: "\3"/g' deployment.yaml
+
+
+ho 'cpu=100m mem=150Mi' | sed -E 's/\b(cpu|mem)=([0-9]+[a-zA-Z]*)/\1="\2"/g'
+
+
+sed -E 's/\b(cpu|mem)=([0-9]+[a-zA-Z]*)/\1="\2"/g' your_file.yaml
+
+
+sed -E -i 's/\b(cpu|mem)=([0-9]+[a-zA-Z]*)/\1="\2"/g' your_file.yaml
+
+
 grep -E '\b(cpu|mem)=[0-9]+[a-z]{1,2}' your_file.yaml
 
 sed -i 's/\bcpu\|mem=[0-9]\+[a-z]\{1,2\}/\1="\2"/g' your_file.yaml
