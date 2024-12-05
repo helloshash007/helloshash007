@@ -1,3 +1,41 @@
+
+---
+- name: Check and delete old directory if exists
+  hosts: target_servers
+  become: yes
+  vars:
+    service_name: "{{ tower_service }}"
+    version: "{{ tower_version }}"
+    base_path: "/opt"
+
+  tasks:
+    - name: Define directory path
+      set_fact:
+        directory_path: "{{ base_path }}/{{ service_name }}/{{ version }}"
+
+    - name: Check if the directory exists
+      stat:
+        path: "{{ directory_path }}"
+      register: dir_status
+
+    - name: Delete the directory if it exists
+      file:
+        path: "{{ directory_path }}"
+        state: absent
+      when: dir_status.stat.exists
+
+
+
+
+
+
+
+
+
+
+
+
+
 ---
 - name: Troubleshoot environment variable
   hosts: localhost
