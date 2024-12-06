@@ -1,0 +1,75 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'TEMPLATE_ID', defaultValue: '1', description: 'Enter the Job Template ID')
+        choice(name: 'SERVICE', choices: ['Service1', 'Service2', 'Service3'], description: 'Select the service')
+        choice(name: 'ENV_SERVICES', choices: ['EnvService1', 'EnvService2'], description: 'Select the environment service')
+        string(name: 'ENV', defaultValue: '', description: 'Enter the environment name')
+        string(name: 'VERSION', defaultValue: '', description: 'Enter the version')
+    }
+
+    environment {
+        TOWER_HOST = "https://ansible.example.com"
+    }
+
+    stages {
+        stage('Run Ansible Job') {
+            steps {
+                script {
+                    withCredentials([
+                        usernamePassword(credentialsId: 'ANSIBLE_TOWER_CRED_ID', usernameVariable: 'TOWER_USERNAME', passwordVariable: 'TOWER_PASSWORD'),
+                        string(credentialsId: 'HASHI_VAULT_TOKEN', variable: 'HASHI_TOKEN'),
+                        string(credentialsId: 'VAULT_TOKEN', variable: 'VAULT_TOKEN')
+                    ]) {
+                        // Get the Ansible Tower token
+                        def authResponse = sh(script: """
+                            curl -s -X POST -H "Content-Type: application/json" \
+                            -d '{ 
+                                "username": "${TOWER_USERNAME}", 
+                                "password": "${TOWER_PASSWORD}" 
+                            }' \
+                            ${TOWER_HOST}/api/v2/tokens/
+                        """, returnStdout: true).trim()
+
+                        // Debug: Print the full authResponse to understand what went wrong
+                        echo "Auth Response: ${authResponse}"
+
+                        // Extract token from the response
+                        def token = sh(script: "echo '${authResponse}' | jq -r .token", returnStdout: true).trim()
+
+                        if (!token) {
+                            error "Failed to retrieve Ansible Tower token. Response: ${authResponse}"
+                        }
+
+                        echo "Successfully retrieved Ansible Tower token: ${token}"
+
+                        // Define extra_vars JSON
+                        def extraVars = """
+                        {
+                            "env": "${params.ENV}",
+                            "username": "${TOWER_USERNAME}",
+                            "password": "${TOWER_PASSWORD}",
+                            "service_name": "${params.SERVICE}",
+                            "env_name": "${params.ENV_SERVICES}",
+                            "version": "${params.VERSION}",
+                            "hashi_token": "${HASHI_TOKEN}",
+                            "vault_token": "${VAULT_TOKEN}"
+                        }
+                        """
+
+                        // Launch the Ansible job template
+                        def launchResponse = sh(script: """
+                            curl -s -X POST ${TOWER_HOST}/api/v2/job_templates/${params.TEMPLATE_ID}/launch/ \
+                            -H "Authorization: Bearer ${token}" \
+                            -H "Content-Type: application/json" \
+                            -d '{ "extra_vars": ${extraVars} }'
+                        """, returnStdout: true).trim()
+
+                        echo "Launch Response: ${launchResponse}"
+                    }
+                }
+            }
+        }
+    }
+}
