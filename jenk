@@ -1,0 +1,65 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'SERVICE', choices: ['Service1', 'Service2', 'Service3'], description: 'Select the service')
+        choice(name: 'ENV_SERVICES', choices: ['EnvService1', 'EnvService2'], description: 'Select the environment service')
+        string(name: 'ENV', defaultValue: '', description: 'Enter the environment name')
+        string(name: 'VERSION', defaultValue: '', description: 'Enter the version')
+    }
+
+    environment {
+        ANSIBLE_API_URL = "https://ansible.example.com/api/v2/job_templates/{TEMPLATE_ID}/launch"
+        TEMPLATE_ID = "YOUR_TEMPLATE_ID"
+        VAULT_SECRET = credentials('VAULT_SECRET_CRED_ID')
+        HASHI_SECRET = credentials('HASHI_SECRET_CRED_ID')
+        ANSIBLE_USERNAME = credentials('ANSIBLE_USERNAME_CRED_ID')
+        ANSIBLE_PASSWORD = credentials('ANSIBLE_PASSWORD_CRED_ID')
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    // Fetching Hashi and Vault tokens
+                    env.HASHI_TOKEN = HASHI_SECRET
+                    env.VAULT_TOKEN = VAULT_SECRET
+
+                    // Ensuring both tokens have the same value if needed
+                    if (HASHI_TOKEN == VAULT_TOKEN) {
+                        echo "Hashi token and Vault token are the same."
+                    }
+                }
+            }
+        }
+
+        stage('Run Ansible Playbook') {
+            steps {
+                script {
+                    def extravars = [
+                        env        : params.ENV,
+                        username   : env.ANSIBLE_USERNAME,
+                        password   : env.ANSIBLE_PASSWORD,
+                        service_name: params.SERVICE,
+                        env_name   : params.ENV_SERVICES,
+                        version    : params.VERSION,
+                        hashi_token: env.HASHI_TOKEN,
+                        vault_token: env.VAULT_TOKEN
+                    ]
+
+                    def curlCommand = """
+                        curl -k -X POST \
+                        -u ${env.ANSIBLE_USERNAME}:${env.ANSIBLE_PASSWORD} \
+                        -H "Content-Type: application/json" \
+                        -d '{"extra_vars": ${groovy.json.JsonOutput.toJson(extravars)}}' \
+                        ${env.ANSIBLE_API_URL.replace("{TEMPLATE_ID}", env.TEMPLATE_ID)}
+                    """
+
+                    echo "Executing Ansible Job Template with extra vars: ${extravars}"
+                    def response = sh(script: curlCommand, returnStdout: true).trim()
+                    echo "Ansible API Response: ${response}"
+                }
+            }
+        }
+    }
+}
