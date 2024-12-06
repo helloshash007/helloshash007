@@ -1,0 +1,56 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'ENVIRONMENT', description: 'Enter the environment (e.g., dev, staging, prod)')
+        choice(name: 'SERVICE_NAME', choices: ['service1', 'service2', 'service3'], description: 'Choose the service')
+        string(name: 'VERSION', description: 'Enter the version number')
+    }
+
+    environment {
+        HASHI_SECRET = credentials('hashi-vault-secret') // Jenkins credential ID for HashiCorp Vault
+        VAULT_SECRET = credentials('vault-secret')       // Jenkins credential ID for Vault
+        USERNAME = credentials('username-credential-id') // Jenkins credential ID for Username
+        PASSWORD = credentials('password-credential-id') // Jenkins credential ID for Password
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    // Extract credentials and parameters
+                    def hashiToken = env.HASHI_SECRET
+                    def vaultToken = env.VAULT_SECRET
+                    def username = env.USERNAME
+                    def password = env.PASSWORD
+
+                    // Display parameters for confirmation (optional)
+                    echo "Environment: ${params.ENVIRONMENT}"
+                    echo "Service: ${params.SERVICE_NAME}"
+                    echo "Version: ${params.VERSION}"
+                }
+            }
+        }
+
+        stage('Run Ansible') {
+            steps {
+                script {
+                    // Construct ansible-playbook command with extra-vars
+                    def ansibleCommand = """
+                        ansible-playbook -i inventory.yml playbook.yml \\
+                        --extra-vars "env=${params.ENVIRONMENT} \\
+                        username=${USERNAME} \\
+                        password=${PASSWORD} \\
+                        service_name=${params.SERVICE_NAME} \\
+                        env_name=${params.ENVIRONMENT} \\
+                        version=${params.VERSION} \\
+                        hashi_token=${HASHI_SECRET} \\
+                        vault_token=${VAULT_SECRET}"
+                    """
+                    echo "Running Ansible Playbook with command: ${ansibleCommand}"
+                    sh ansibleCommand
+                }
+            }
+        }
+    }
+}
