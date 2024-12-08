@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Input parameter
+environment=$1
+param1=$2
+param2=$3
+param3=$4
+
+# Define variables for 'prod' environment
+if [ "$environment" == "prod" ]; then
+    var1="prod_value1"
+    var2="prod_value2"
+    var3="prod_value3"
+    var4="prod_value4"
+    var5="prod_value5"
+    var6="prod_value6"
+    var7="prod_value7"
+    var8="prod_value8"
+else
+    # Define variables for non-prod environments
+    var1="non_prod_value1"
+    var2="non_prod_value2"
+    var3="non_prod_value3"
+    var4="non_prod_value4"
+    var5="non_prod_value5"
+    var6="non_prod_value6"
+    var7="non_prod_value7"
+    var8="non_prod_value8"
+fi
+
+# Print the chosen environment and variables (for verification)
+echo "Environment: $environment"
+echo "Variables:"
+echo "var1: $var1"
+echo "var2: $var2"
+echo "var3: $var3"
+echo "var4: $var4"
+echo "var5: $var5"
+echo "var6: $var6"
+echo "var7: $var7"
+echo "var8: $var8"
+
+# Use $param1, $param2, $param3 in your script logic
+echo "Additional Parameters:"
+echo "Param1: $param1"
+echo "Param2: $param2"
+echo "Param3: $param3"
