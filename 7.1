@@ -1,0 +1,90 @@
+pipeline {
+    agent any
+
+    environment {
+        TOWER_URL = 'https://ansible-tower.example.com/api/v2'
+    }
+
+    stages {
+        stage('Trigger Ansible Tower Job') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'ansible_tower_credentials', 
+                                                  usernameVariable: 'TOWER_USERNAME', 
+                                                  passwordVariable: 'TOWER_PASSWORD')]) {
+                    script {
+                        echo "Triggering Ansible Tower Job Template"
+
+                        // Trigger the job template and store the HTTP response
+                        def response = sh(
+                            script: '''
+                            curl -sk -X POST -u "$TOWER_USERNAME:$TOWER_PASSWORD" \
+                            -H "Content-Type: application/json" \
+                            -d '{ "extra_vars": {} }' \
+                            -w "%{http_code}" \
+                            $TOWER_URL/job_templates/YOUR_TEMPLATE_ID/launch/ \
+                            -o response.json
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        // Split response into HTTP body and code
+                        def responseCode = response[-3..-1] // Last 3 characters are the HTTP code
+                        def responseBody = readFile('response.json')
+
+                        if (responseCode != "201") {
+                            error "Failed to trigger the Ansible Tower job. HTTP Status: ${responseCode}"
+                        }
+
+                        // Parse the response to extract Job ID
+                        def jsonResponse = readJSON text: responseBody
+                        def jobId = jsonResponse.id
+
+                        if (!jobId) {
+                            error "Failed to retrieve Job ID from Ansible Tower response!"
+                        }
+
+                        echo "Triggered Job ID: ${jobId}"
+
+                        // Store Job ID for the next stage
+                        env.ANSIBLE_JOB_ID = jobId
+                    }
+                }
+            }
+        }
+
+        stage('Fetch Ansible Tower Job Output') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'ansible_tower_credentials', 
+                                                  usernameVariable: 'TOWER_USERNAME', 
+                                                  passwordVariable: 'TOWER_PASSWORD')]) {
+                    script {
+                        echo "Fetching logs for Ansible Tower Job ID: ${env.ANSIBLE_JOB_ID}"
+
+                        // Fetch logs using the Job ID
+                        def response = sh(
+                            script: '''
+                            curl -sk -u "$TOWER_USERNAME:$TOWER_PASSWORD" \
+                            -H "Content-Type: application/json" \
+                            $TOWER_URL/jobs/$ANSIBLE_JOB_ID/stdout/ \
+                            -w "%{http_code}" \
+                            -o ansible_tower_logs.txt
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        def responseCode = response[-3..-1]
+
+                        if (responseCode != "200") {
+                            error "Failed to fetch logs for Job ID: ${env.ANSIBLE_JOB_ID}. HTTP Status: ${responseCode}"
+                        }
+
+                        echo "Logs retrieved and saved to ansible_tower_logs.txt"
+
+                        // Optionally display logs in Jenkins console
+                        sh "cat ansible_tower_logs.txt"
+                    }
+                }
+            }
+        }
+    }
+}
