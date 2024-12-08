@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Assign input parameters to variables
+environment=$1
+param1=$2
+param2=$3
+param3=$4
+
+# Set the URL based on the environment
+if [ "$environment" == "prod" ]; then
+    base_url="https://asbs.com"
+else
+    base_url="https://CCC.com"  # Default URL for all non-prod environments
+fi
+
+# Print the chosen URL (for verification)
+echo "Environment: $environment"
+echo "Base URL: $base_url"
+
+# Use the URL in your script logic
+# Example of using the base_url in a curl command
+curl -X GET "${base_url}/api/example" -H "Authorization: Bearer TOKEN"
+
+# Use $param1, $param2, $param3 as needed in your script logic
+echo "Param1: $param1"
+echo "Param2: $param2"
+echo "Param3: $param3"
