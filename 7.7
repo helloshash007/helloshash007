@@ -1,0 +1,73 @@
+stage('Fetch Ansible Tower Job Logs') {
+    steps {
+        withCredentials([usernamePassword(credentialsId: 'ansible_tower_credentials', 
+                                          usernameVariable: 'TOWER_USERNAME', 
+                                          passwordVariable: 'TOWER_PASSWORD')]) {
+            script {
+                // Define the Ansible job ID and URL
+                def jobId = env.ANSIBLE_JOB_ID
+                def towerUrl = env.TOWER_URL
+
+                echo "Fetching logs for Ansible Tower Job ID: ${jobId}"
+
+                // Fetch logs using curl
+                def response = sh(
+                    script: """
+                    curl -sk -u "$TOWER_USERNAME:$TOWER_PASSWORD" \
+                    -H "Content-Type: application/json" \
+                    "$towerUrl/jobs/$jobId/stdout/?format=json" \
+                    -w "%{http_code}" \
+                    -o ansible_tower_logs.json
+                    """,
+                    returnStdout: true
+                ).trim()
+
+                // Check response code (should be 200 for success)
+                def responseCode = response[-3..-1]
+                echo "Fetch Logs Response Code: ${responseCode}"
+
+                if (responseCode != "200") {
+                    echo "Failed to fetch logs. HTTP Status: ${responseCode}"
+                    sh "cat ansible_tower_logs.json || echo 'No logs available'"
+                    error "Failed to fetch logs for Job ID: ${jobId}. HTTP Status: ${responseCode}"
+                }
+
+                // Read the content of the log file
+                def responseContent = readFile('ansible_tower_logs.json')
+                echo "Raw Logs Content:"
+                echo "${responseContent}"
+
+                // Check if the content is valid JSON
+                if (responseContent.trim().startsWith("{") || responseContent.trim().startsWith("[")) {
+                    // Parse the JSON
+                    def logsJson = readJSON text: responseContent
+
+                    // Initialize a variable to track job success status
+                    def jobSuccessful = true
+
+                    // Loop through the logs and extract task names and status
+                    logsJson.each { entry ->
+                        // Check if the entry contains task information
+                        if (entry.event_display) {
+                            echo "Task: ${entry.event_display}"
+
+                            // Optionally, check if any task failed
+                            if (entry.event == 'failed') {
+                                jobSuccessful = false
+                            }
+                        }
+                    }
+
+                    // Display job completion status
+                    if (jobSuccessful) {
+                        echo "Ansible Job completed successfully."
+                    } else {
+                        echo "Ansible Job encountered failures."
+                    }
+                } else {
+                    echo "Logs are not in JSON format. Raw Content: ${responseContent}"
+                }
+            }
+        }
+    }
+}
