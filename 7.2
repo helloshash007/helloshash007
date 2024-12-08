@@ -1,0 +1,94 @@
+pipeline {
+    agent any
+
+    environment {
+        TOWER_URL = 'https://ansible-tower.example.com/api/v2'
+    }
+
+    stages {
+        stage('Trigger Ansible Tower Job') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'ansible_tower_credentials', 
+                                                  usernameVariable: 'TOWER_USERNAME', 
+                                                  passwordVariable: 'TOWER_PASSWORD')]) {
+                    script {
+                        echo "Triggering Ansible Tower Job Template"
+
+                        def response = sh(
+                            script: '''
+                            curl -sk -X POST -u "$TOWER_USERNAME:$TOWER_PASSWORD" \
+                            -H "Content-Type: application/json" \
+                            -d '{ "extra_vars": {} }' \
+                            $TOWER_URL/job_templates/YOUR_TEMPLATE_ID/launch/ \
+                            -w "%{http_code}" \
+                            -o response.json
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        def responseCode = response[-3..-1]
+                        def responseBody = readFile('response.json')
+
+                        echo "Debug: Launch Response Code: ${responseCode}"
+                        echo "Debug: Launch Response Body: ${responseBody}"
+
+                        if (responseCode != "201") {
+                            error "Failed to trigger the Ansible Tower job. HTTP Status: ${responseCode}"
+                        }
+
+                        def jsonResponse = readJSON text: responseBody
+                        def jobId = jsonResponse.id
+
+                        if (!jobId) {
+                            error "Failed to retrieve Job ID from Ansible Tower response!"
+                        }
+
+                        echo "Triggered Job ID: ${jobId}"
+                        env.ANSIBLE_JOB_ID = jobId
+                    }
+                }
+            }
+        }
+
+        stage('Fetch Ansible Tower Job Logs') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'ansible_tower_credentials', 
+                                                  usernameVariable: 'TOWER_USERNAME', 
+                                                  passwordVariable: 'TOWER_PASSWORD')]) {
+                    script {
+                        echo "Fetching logs for Ansible Tower Job ID: ${env.ANSIBLE_JOB_ID}"
+
+                        def response = sh(
+                            script: '''
+                            curl -sk -u "$TOWER_USERNAME:$TOWER_PASSWORD" \
+                            -H "Content-Type: application/json" \
+                            $TOWER_URL/jobs/$ANSIBLE_JOB_ID/stdout/?format=json \
+                            -w "%{http_code}" \
+                            -o ansible_tower_logs.json
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        def responseCode = response[-3..-1]
+                        echo "Debug: Fetch Logs Response Code: ${responseCode}"
+
+                        if (responseCode != "200") {
+                            echo "Debug: Logs File Content:"
+                            sh "cat ansible_tower_logs.json || true"
+                            error "Failed to fetch logs for Job ID: ${env.ANSIBLE_JOB_ID}. HTTP Status: ${responseCode}"
+                        }
+
+                        echo "Logs retrieved and saved to ansible_tower_logs.json"
+
+                        // Parse and display JSON logs
+                        def logsJson = readJSON file: 'ansible_tower_logs.json'
+                        echo "Ansible Tower Job Logs (Phases):"
+                        logsJson.each { phase ->
+                            echo "Phase: ${phase['event_display']} - ${phase['stdout']}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
