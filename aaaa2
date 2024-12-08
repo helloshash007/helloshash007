@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Input parameters
+environment=$1
+param1=$2
+param2=$3
+param3=$4
+
+# Check if environment is provided
+if [ -z "$environment" ]; then
+    echo "Error: Environment not specified. Use 'prod', 'dev', or other environments."
+    exit 1
+fi
+
+# Set the JSON file based on the environment
+if [ "$environment" == "prod" ]; then
+    json_file="prod.json"
+else
+    json_file="dev.json"  # Default for non-prod
+fi
+
+# Git repository configuration (replace with actual values)
+repo_dir="config-repo"
+repo_url="https://github.com/your-org/config-repo.git"  # Replace with your Git repository URL
+
+# Clone or update the Git repository
+if [ ! -d "$repo_dir" ]; then
+    echo "Cloning repository..."
+    git clone "$repo_url" "$repo_dir"
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to clone the repository."
+        exit 1
+    fi
+else
+    echo "Updating repository..."
+    cd "$repo_dir"
+    git pull
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to update the repository."
+        exit 1
+    fi
+    cd ..
+fi
+
+# Path to the JSON file
+json_path="$repo_dir/$json_file"
+
+# Check if the JSON file exists
+if [ ! -f "$json_path" ]; then
+    echo "Error: $json_file not found in the repository."
+    exit 1
+fi
+
+# Parse the JSON file and export variables
+echo "Loading variables from $json_file..."
+while IFS="=" read -r key value; do
+    export "$key"="$value"
+done < <(jq -r 'to_entries | .[] | "
