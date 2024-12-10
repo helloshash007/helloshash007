@@ -1,0 +1,67 @@
+pipeline {
+    agent any
+    parameters {
+        choice(name: 'ENav', choices: ['dev', 'qa', 'prod'], description: 'Select the environment')
+    }
+    environment {
+        ANSIBLE_TOWER_URL = "https://your-ansible-tower"
+        JOB_TEMPLATE_ID = 123 // Replace with your template ID
+    }
+    stages {
+        stage('Launch Ansible Job') {
+            steps {
+                script {
+                    withCredentials([
+                        usernamePassword(credentialsId: 'ansibleTowerCreds', 
+                                         usernameVariable: 'TOWER_USER', 
+                                         passwordVariable: 'TOWER_PASS')
+                    ]) {
+                        // Define extra_vars dynamically from parameters
+                        def extraVars = [
+                            env: params.ENav // Dynamically pass the selected environment
+                        ]
+
+                        // Convert extraVars to JSON
+                        def extraVarsJson = new groovy.json.JsonBuilder(extraVars).toString()
+                        echo "Extra Vars JSON: $extraVarsJson"
+
+                        // Launch the Ansible Tower job
+                        def jobId = sh(script: """
+                            curl -s -k -X POST "$ANSIBLE_TOWER_URL/api/v2/job_templates/$JOB_TEMPLATE_ID/launch/" \
+                            -u "$TOWER_USER:$TOWER_PASS" \
+                            -H "Content-Type: application/json" \
+                            -d '{
+                                "extra_vars": $extraVarsJson
+                            }' \
+                            | jq -r '.job'
+                        """, returnStdout: true).trim()
+
+                        echo "Launched Job ID: ${jobId}"
+
+                        // Poll for job status
+                        sh """
+                        while true; do
+                          STATUS=\$(curl -s -k "$ANSIBLE_TOWER_URL/api/v2/jobs/${jobId}/" \
+                          -u "$TOWER_USER:$TOWER_PASS" \
+                          | jq -r '.status')
+
+                          echo "Current Job Status: \$STATUS"
+
+                          if [[ "\$STATUS" == "successful" || "\$STATUS" == "failed" ]]; then
+                            break
+                          fi
+                          sleep 5
+                        done
+                        """
+
+                        // Fetch logs
+                        sh """
+                        curl -s -k "$ANSIBLE_TOWER_URL/api/v2/jobs/${jobId}/stdout/?format=txt" \
+                        -u "$TOWER_USER:$TOWER_PASS"
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
