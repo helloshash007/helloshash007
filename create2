@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# Define a log function to capture and log each step with timestamps
+log() {
+  echo "$(date +'%Y-%m-%d %H:%M:%S') - $1"
+}
+
+# Task 1: Assign Arguments to Variables
+log "Starting deployment process..."
+DOCKER_IMG_NEW=$1
+SERVICE_NAME=$2
+VERSION=$3
+ENVIRONMENT=$4
+GIT_REPO_URL=$5
+KUBE_API_URL=$6
+KUBE_TOKEN=$7
+MANIFEST_PATH=$8
+
+log "Arguments received: DOCKER_IMG_NEW=$DOCKER_IMG_NEW, SERVICE_NAME=$SERVICE_NAME, VERSION=$VERSION, ENVIRONMENT=$ENVIRONMENT, GIT_REPO_URL=$GIT_REPO_URL, KUBE_API_URL=$KUBE_API_URL, KUBE_TOKEN=$KUBE_TOKEN, MANIFEST_PATH=$MANIFEST_PATH"
+
+# Task 2: Define Variables Based on Environment
+log "Defining environment-specific variables..."
+if [[ "$ENVIRONMENT" == "prod" ]]; then
+  CONFIG_FILE="prod_config.yaml"
+  log "Environment set to prod. Using config file: $CONFIG_FILE"
+else
+  CONFIG_FILE="dev_config.yaml"
+  log "Environment set to dev. Using config file: $CONFIG_FILE"
+fi
+
+# Task 3: Create Directory
+log "Creating directory for $SERVICE_NAME..."
+mkdir -p /tmp/$SERVICE_NAME && cd /tmp/$SERVICE_NAME
+log "Directory created and changed to /tmp/$SERVICE_NAME"
+
+# Task 4: Clone Git Repository
+log "Cloning Git repository from $GIT_REPO_URL..."
+git clone $GIT_REPO_URL . && log "Repository cloned successfully from $GIT_REPO_URL" || { log "Git clone failed"; exit 1; }
+
+# Task 5: Pull Latest Changes
+log "Pulling latest changes from the main branch..."
+git pull origin main && log "Git pull successful" || { log "Git pull failed"; exit 1; }
+
+# Task 6: Checkout to Specific Version or Branch
+log "Checking out to version $VERSION..."
+git checkout $VERSION && log "Checked out to version $VERSION" || { log "Git checkout failed"; exit 1; }
+
+# Task 7: Create Variable for Manifest Path
+log "Setting manifest path to $MANIFEST_PATH..."
+MANIFEST_FILE="$MANIFEST_PATH/deploy.yaml"
+log "Manifest path set to $MANIFEST_FILE"
+
+# Task 8: Modify Docker Image in the Manifest File using sed
+log "Updating Docker image in $MANIFEST_FILE..."
+sed -i "s|DOCKER_IMG|${DOCKER_IMG_NEW}|g" $MANIFEST_FILE && log "Docker image updated in $MANIFEST_FILE" || { log "Failed to update Docker image"; exit 1; }
+
+# Task 9: Modify Kafka Configuration in config.yaml
+log "Updating Kafka configuration in $CONFIG_FILE..."
+# Example of modifying Kafka configuration (e.g., update Kafka server URL)
+sed -i "s|KAFKA_URL=.*|KAFKA_URL=${KAFKA_URL}|g" $CONFIG_FILE && log "Kafka configuration updated in $CONFIG_FILE" || { log "Failed to update Kafka configuration"; exit 1; }
+
+# Task 10: Echo All Variables for Logging
+log "Deployment variables:"
+log "DOCKER_IMG_NEW=$DOCKER_IMG_NEW"
+log "SERVICE_NAME=$SERVICE_NAME"
+log "VERSION=$VERSION"
+log "ENVIRONMENT=$ENVIRONMENT"
+log "GIT_REPO_URL=$GIT_REPO_URL"
+log "KUBE_API_URL=$KUBE_API_URL"
+log "KUBE_TOKEN=$KUBE_TOKEN"
+log "MANIFEST_PATH=$MANIFEST_PATH"
+
+# Task 11: Kubernetes Token Generation (if applicable)
+log "Generating Kubernetes token..."
+# Example: Retrieve the token using kubectl or Vault (adjust as needed)
+export KUBE_TOKEN=$(vault kv get -field=value secret/k8s_token) && log "Kubernetes token generated" || { log "Failed to generate Kubernetes token"; exit 1; }
+
+# Task 12: Set Up Kubernetes Configuration
+log "Setting up Kubernetes configuration..."
+kubectl config set-cluster $ENVIRONMENT --server=$KUBE_API_URL && \
+kubectl config set-credentials user --token=$KUBE_TOKEN && \
+kubectl config set-context $ENVIRONMENT --cluster=$ENVIRONMENT --user=user && \
+kubectl config use-context $ENVIRONMENT && \
+log "Kubernetes configuration set up successfully" || { log "Failed to set up Kubernetes configuration"; exit 1; }
+
+# Task 13: Apply Kubernetes Deployment
+log "Applying Kubernetes deployment..."
+kubectl apply -f $MANIFEST_FILE && log "Kubernetes deployment applied successfully" || { log "Failed to apply Kubernetes deployment"; exit 1; }
+
+# Task 14: View Kubernetes Config
+log "Viewing Kubernetes configuration..."
+kubectl config view && log "Kubernetes config viewed successfully" || { log "Failed to view Kubernetes config"; exit 1; }
+
+# Task 15: Describe Pod Status
+log "Describing pod status..."
+kubectl describe pods && log "Pod status described successfully" || { log "Failed to describe pod status"; exit 1; }
+
+# Task 16: Get Pod Status
+log "Getting pod status..."
+kubectl get pods && log "Pod status retrieved successfully" || { log "Failed to get pod status"; exit 1; }
+
+# Task 17: Log Final Status
+log "Deployment process complete."
+
+
+
+
+---
+- name: Deploy Service to Kubernetes
+  hosts: localhost
+  gather_facts: no
+  vars:
+    DOCKER_IMG_NEW: "nexus.com:443/AWS/test:12.0"
+    SERVICE_NAME: "my-service"
+    VERSION: "v1.0.0"
+    ENVIRONMENT: "prod"
+    GIT_REPO_URL: "https://github.com/my-org/my-repo.git"
+    KUBE_API_URL: "https://k8s-cluster.example.com"
+    KUBE_TOKEN: "{{ lookup('env', 'KUBE_TOKEN') }}"
+    MANIFEST_PATH: "/path/to/manifest"
+
+  tasks:
+    - name: Run deploy script with arguments
+      script: deploy.sh "{{ DOCKER_IMG_NEW }}" "{{ SERVICE_NAME }}" "{{ VERSION }}" "{{ ENVIRONMENT }}" "{{ GIT_REPO_URL }}" "{{ KUBE_API_URL }}" "{{ KUBE_TOKEN }}" "{{ MANIFEST_PATH }}"
+
+
+
