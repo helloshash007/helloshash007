@@ -1,3 +1,7 @@
+
+
+
+
 pipeline {
     agent any
     parameters {
@@ -85,3 +89,12 @@ pipeline {
         }
     }
 }
+
+
+
+
+if curl -s -o /dev/null -w "%{http_code}" -u <username>:<password> "http://nexus3.systems.uk.hsbc:18082/v2/lms-cbx-monitoring/manifests/0.0.127.16" | grep -q "^200$"; then
+  echo "true"
+else
+  echo "false"
+fi
