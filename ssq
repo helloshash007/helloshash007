@@ -1,0 +1,16 @@
+---
+- name: Run Shell Script and Handle Errors
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute the shell script
+      shell: ./ASB.sh "{{ username }}" "{{ password }}" "{{ service }}" "{{ environment }}" "{{ version }}" "{{ vaulta }}" "{{ vaultb }}"
+      args:
+        executable: /bin/bash
+      register: script_result
+      ignore_errors: no
+
+    - name: Fail if the script encounters an error
+      fail:
+        msg: "The script failed with error: {{ script_result.stderr }}"
+      when: script_result.rc != 0
