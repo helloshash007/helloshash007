@@ -1,0 +1,87 @@
+pipeline {
+    agent any
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'qa', 'prod'], description: 'Select the environment')
+        string(name: 'APP_VERSION', defaultValue: '1.0.0', description: 'Enter the application version')
+    }
+    environment {
+        ANSIBLE_TOWER_URL = "https://your-ansible-tower"
+        JOB_TEMPLATE_ID = 123 // Replace with your template ID
+    }
+    stages {
+        stage('Launch Ansible Job') {
+            steps {
+                script {
+                    withCredentials([
+                        usernamePassword(credentialsId: 'ansibleTowerCreds', 
+                                         usernameVariable: 'TOWER_USER', 
+                                         passwordVariable: 'TOWER_PASS'),
+                        usernamePassword(credentialsId: 'ansibleExtraVarCreds', 
+                                         usernameVariable: 'EXTRA_USER', 
+                                         passwordVariable: 'EXTRA_PASS')
+                    ]) {
+                        // Define extra variables
+                        def extraVars = [
+                            environment: params.ENVIRONMENT, 
+                            app_version: params.APP_VERSION,
+                            debug: true,
+                            extra_user: EXTRA_USER,
+                            extra_pass: EXTRA_PASS
+                        ]
+
+                        // Convert extraVars to JSON
+                        def extraVarsJson = new groovy.json.JsonBuilder(extraVars).toString()
+                        echo "Extra Vars JSON: $extraVarsJson"
+
+                        // Launch Ansible Tower job and get the job ID
+                        def jobId = sh(script: """
+                            curl -s -k -X POST "$ANSIBLE_TOWER_URL/api/v2/job_templates/$JOB_TEMPLATE_ID/launch/" \
+                            -u "$TOWER_USER:$TOWER_PASS" \
+                            -H "Content-Type: application/json" \
+                            -d '{
+                                "extra_vars": $extraVarsJson
+                            }' \
+                            | jq -r '.job'
+                        """, returnStdout: true).trim()
+
+                        // Check if Job ID is null or empty
+                        if (!jobId || jobId == "null") {
+                            error "Failed to launch Ansible Tower job. Received Job ID: ${jobId}."
+                        }
+
+                        echo "Launched Job ID: ${jobId}"
+
+                        // Poll for job status
+                        def status = ""
+                        while (true) {
+                            status = sh(script: """
+                                curl -s -k "$ANSIBLE_TOWER_URL/api/v2/jobs/${jobId}/" \
+                                -u "$TOWER_USER:$TOWER_PASS" \
+                                | jq -r '.status'
+                            """, returnStdout: true).trim()
+
+                            echo "Current Job Status: ${status}"
+
+                            if (status == "successful" || status == "failed") {
+                                break
+                            }
+                            sleep(5)
+                        }
+
+                        // Fetch and display logs
+                        def logs = sh(script: """
+                            curl -s -k "$ANSIBLE_TOWER_URL/api/v2/jobs/${jobId}/stdout/?format=txt" \
+                            -u "$TOWER_USER:$TOWER_PASS"
+                        """, returnStdout: true)
+                        echo "Ansible Job Logs:\n${logs}"
+
+                        // Fail the Jenkins job if Ansible job failed
+                        if (status == "failed") {
+                            error "Ansible Tower job ${jobId} failed. Check logs above for details."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
