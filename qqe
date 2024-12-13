@@ -1,0 +1,33 @@
+---
+- name: Run Shell Script and Capture Logs
+  hosts: all
+  tasks:
+    - name: Execute the shell script
+      shell: /bin/bash test.sh {{ username }} {{ password }}
+      register: script_output
+      environment:
+        username: "{{ username }}"
+        password: "{{ password }}"
+      failed_when: script_output.rc != 0
+
+    - name: Display the script's output
+      debug:
+        msg: |
+          Standard Output:
+          {{ script_output.stdout }}
+
+          Standard Error:
+          {{ script_output.stderr }}
+
+    - name: Save the script logs to a file
+      copy:
+        content: |
+          Standard Output:
+          {{ script_output.stdout }}
+
+          Standard Error:
+          {{ script_output.stderr }}
+
+          Exit Code:
+          {{ script_output.rc }}
+        dest: /path/to/script_logs.log
