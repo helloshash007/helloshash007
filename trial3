@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Check if a file exists
+if [ -f "/path/to/important/file" ]; then
+    echo "File exists. Proceeding with the script."
+else
+    echo "Warning: File does not exist. Please double-check before proceeding."
+    exit 1
+fi
+
+# Rest of the script
+echo "Performing further operations..."
