@@ -1,0 +1,37 @@
+pipeline {
+    agent any
+    parameters {
+        // First Choice Dropdown
+        choice(
+            name: 'FIRST_CHOICE',
+            choices: ['ABC', '123'],
+            description: 'Select the first choice.'
+        )
+        // Second Choice Dropdown (Dynamic)
+        dynamicChoice(
+            name: 'SECOND_CHOICE',
+            script: [
+                'groovy': '''
+                if (FIRST_CHOICE == 'ABC') {
+                    return ['ABC1', 'ABC2', 'ABC3', 'ABC4']
+                } else if (FIRST_CHOICE == '123') {
+                    return ['123', '1234', '12345', '123456']
+                } else {
+                    return ['No options available']
+                }
+                '''
+            ],
+            description: 'Select the second choice based on the first choice.'
+        )
+    }
+    stages {
+        stage('Display Selections') {
+            steps {
+                script {
+                    echo "First Choice: ${params.FIRST_CHOICE}"
+                    echo "Second Choice: ${params.SECOND_CHOICE}"
+                }
+            }
+        }
+    }
+}
