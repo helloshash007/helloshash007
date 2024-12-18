@@ -1,0 +1,239 @@
+Below is a draft outline for creating a Confluence document to demonstrate the solution for Kubernetes deployment using Jenkins, Ansible, and Nexus.
+
+
+---
+
+Kubernetes Deployment Solution Using Jenkins and Ansible
+
+Overview
+
+This document demonstrates the end-to-end process for deploying microservices to a Kubernetes cluster using Jenkins pipelines. The solution leverages Ansible for orchestration, Jenkins credentials for secure access, and Nexus for managing Docker images and deployment scripts. The deployment ensures robust pre- and post-deployment checks for reliability and reusability.
+
+
+---
+
+Solution Architecture
+
+Key Components
+
+1. Jenkins Pipeline
+
+Configured to invoke Ansible with extra_vars passed from Jenkins.
+
+Uses Jenkins credentials for secure access to required services.
+
+
+
+2. Ansible Playbook
+
+Automates Kubernetes deployment by invoking a script (ikp.sh) saved in Nexus.
+
+Performs pre-deployment checks (e.g., Docker package availability).
+
+Executes deployment with provided manifests and Docker images.
+
+
+
+3. GitHub
+
+Hosts Kubernetes manifests for microservices.
+
+Serves as a source for pipeline jobs to fetch deployment configurations.
+
+
+
+4. Nexus
+
+Stores Docker images for the services.
+
+Hosts deployment scripts for Kubernetes cluster operations.
+
+
+
+5. Kubernetes Cluster
+
+Target environment for the deployment of microservices.
+
+
+
+
+
+---
+
+Deployment Workflow
+
+1. Jenkins Pipeline
+
+Input Parameters:
+
+Manifest_Path (GitHub location of Kubernetes manifest).
+
+Docker_Image (Nexus Docker image location).
+
+Extra_Vars (e.g., service name, environment).
+
+
+Credential Configuration:
+
+Access tokens for Nexus and Kubernetes Cluster are securely managed via Jenkins credentials.
+
+
+Pipeline Steps:
+
+1. Fetch Kubernetes manifest from GitHub.
+
+
+2. Fetch Docker image and deployment script from Nexus.
+
+
+3. Execute Ansible playbook with extra_vars (passed from Jenkins).
+
+
+4. Post-deployment validations.
+
+
+
+
+2. Ansible Playbook
+
+Pre-Deployment Checks:
+
+Validate that Docker is installed and running.
+
+Ensure the Kubernetes manifest is correct and adheres to schema.
+
+
+Deployment:
+
+Invoke the deployment script (ikp.sh) with required arguments:
+
+./ikp.sh <service> <environment> <docker_image> <manifest_path>
+
+Apply Kubernetes manifests using kubectl.
+
+
+Post-Deployment Validations:
+
+Check the status of pods:
+
+kubectl get pods -n <namespace>
+
+Verify the application is accessible and running.
+
+
+
+
+---
+
+Key Features
+
+1. Reusable Jenkins Job:
+
+Designed for multiple deployments by parametrizing manifest paths and Docker image tags.
+
+
+
+2. Docker Image Management:
+
+Docker images are built and pushed to Nexus for version-controlled deployment.
+
+
+
+3. Robust Pre- and Post-Deployment Checks:
+
+Ensures deployment reliability by validating Docker installation and pod health status.
+
+
+
+4. Version Control:
+
+Deployment manifests and scripts are versioned in GitHub and Nexus for consistency.
+
+
+
+
+
+---
+
+Jenkins Pipeline Script Example
+
+pipeline {
+    agent any
+    environment {
+        DOCKER_IMAGE = credentials('nexus_docker_image')
+        MANIFEST_PATH = params.Manifest_Path
+    }
+    stages {
+        stage('Fetch Kubernetes Manifest') {
+            steps {
+                git branch: 'main', url: 'https://github.com/your-repo/manifests.git'
+            }
+        }
+        stage('Fetch Deployment Script') {
+            steps {
+                sh "curl -o ikp.sh http://nexus-repo/scripts/ikp.sh"
+                sh "chmod +x ikp.sh"
+            }
+        }
+        stage('Execute Ansible Playbook') {
+            steps {
+                ansiblePlaybook(
+                    playbook: 'deploy.yml',
+                    extras: "--extra-vars \"service=${params.Service} environment=${params.Environment}\""
+                )
+            }
+        }
+        stage('Post-Deployment Checks') {
+            steps {
+                sh "kubectl get pods -n ${params.Namespace}"
+            }
+        }
+    }
+}
+
+
+---
+
+Ansible Playbook Example
+
+- name: Deploy to Kubernetes
+  hosts: localhost
+  tasks:
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      failed_when: "'not found' in docker_check.stderr"
+
+    - name: Run Deployment Script
+      command: ./ikp.sh "{{ service }}" "{{ environment }}" "{{ docker_image }}" "{{ manifest_path }}"
+
+    - name: Check Pod Status
+      shell: kubectl get pods -n "{{ namespace }}"
+      register: pod_status
+
+    - name: Print Pod Status
+      debug:
+        var: pod_status.stdout
+
+
+---
+
+Post-Deployment Validations
+
+Pod Status: Ensure all pods are in the Running state.
+
+Service Accessibility: Validate application functionality via API or web interface.
+
+
+
+---
+
+Conclusion
+
+This solution provides a flexible, scalable, and secure approach for Kubernetes deployments. By integrating Jenkins, Ansible, and Nexus, it achieves a reusable and efficient deployment pipeline that can handle multiple microservices with minimal manual intervention.
+
+
+---
+
+Does this meet your requirements?
+
