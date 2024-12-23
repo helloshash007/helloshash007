@@ -1,0 +1,50 @@
+pipeline {
+    agent any
+    parameters {
+        string(name: 'USER_NAME', defaultValue: 'John Doe', description: 'Enter your name')
+        string(name: 'PROJECT_NAME', defaultValue: 'SampleProject', description: 'Enter the project name')
+        choice(name: 'FIRST_CHOICE', choices: ['ABC', 'ABC2'], description: 'Select the first choice (ABC or ABC2)')
+        choice(name: 'SECOND_CHOICE_ABC', choices: ['Choice1', 'Choice2', 'Choice3', 'Choice4'], description: 'Options for ABC')
+        choice(name: 'SECOND_CHOICE_ABC2', choices: ['Choice5', 'Choice6', 'Choice7', 'Choice8'], description: 'Options for ABC2')
+    }
+    stages {
+        stage('Debug Parameters') {
+            steps {
+                script {
+                    echo "USER_NAME: ${params.USER_NAME}"
+                    echo "PROJECT_NAME: ${params.PROJECT_NAME}"
+                    echo "FIRST_CHOICE: ${params.FIRST_CHOICE}"
+                    echo "SECOND_CHOICE_ABC: ${params.SECOND_CHOICE_ABC}"
+                    echo "SECOND_CHOICE_ABC2: ${params.SECOND_CHOICE_ABC2}"
+                }
+            }
+        }
+        stage('Process Input') {
+            steps {
+                script {
+                    // Determine second choice based on FIRST_CHOICE
+                    def secondChoice
+                    if (params.FIRST_CHOICE == 'ABC') {
+                        secondChoice = params.SECOND_CHOICE_ABC
+                    } else if (params.FIRST_CHOICE == 'ABC2') {
+                        secondChoice = params.SECOND_CHOICE_ABC2
+                    } else {
+                        error "Invalid FIRST_CHOICE: ${params.FIRST_CHOICE}"
+                    }
+
+                    echo "First Choice: ${params.FIRST_CHOICE}"
+                    echo "Second Choice: ${secondChoice}"
+
+                    // Example logic using the selections
+                    if (params.FIRST_CHOICE == 'ABC' && secondChoice == 'Choice1') {
+                        echo "You selected ABC -> Choice1. Proceeding with Task A."
+                    } else if (params.FIRST_CHOICE == 'ABC2' && secondChoice == 'Choice5') {
+                        echo "You selected ABC2 -> Choice5. Proceeding with Task B."
+                    } else {
+                        echo "No specific logic defined for your selection. Proceeding with default task."
+                    }
+                }
+            }
+        }
+    }
+}
