@@ -1,0 +1,51 @@
+pipeline {
+    agent any
+    parameters {
+        string(name: 'USER_NAME', defaultValue: '', description: 'Enter your name (optional)')
+        string(name: 'PROJECT_NAME', defaultValue: '', description: 'Enter the project name (optional)')
+        choice(name: 'FIRST_CHOICE', choices: ['None', 'ABC', 'ABC2'], description: 'Select the first choice (ABC or ABC2)')
+        choice(name: 'SECOND_CHOICE_ABC', choices: ['None', 'Choice1', 'Choice2', 'Choice3', 'Choice4'], description: 'Options for ABC')
+        choice(name: 'SECOND_CHOICE_ABC2', choices: ['None', 'Choice5', 'Choice6', 'Choice7', 'Choice8'], description: 'Options for ABC2')
+    }
+    stages {
+        stage('Prepare Parameters') {
+            steps {
+                script {
+                    // Initialize parameters map for Ansible
+                    def ansibleParams = [:]
+
+                    // Add user and project name only if provided
+                    if (params.USER_NAME?.trim()) {
+                        ansibleParams['user_name'] = params.USER_NAME
+                    }
+
+                    if (params.PROJECT_NAME?.trim()) {
+                        ansibleParams['project_name'] = params.PROJECT_NAME
+                    }
+
+                    // Determine the value of second_choice
+                    def secondChoice = null
+                    if (params.FIRST_CHOICE == 'ABC' && params.SECOND_CHOICE_ABC != 'None') {
+                        secondChoice = params.SECOND_CHOICE_ABC
+                    } else if (params.FIRST_CHOICE == 'ABC2' && params.SECOND_CHOICE_ABC2 != 'None') {
+                        secondChoice = params.SECOND_CHOICE_ABC2
+                    }
+
+                    // Add second_choice only if it's not null
+                    if (secondChoice) {
+                        ansibleParams['second_choice'] = secondChoice
+                    }
+
+                    // Log the final parameters
+                    echo "Ansible Parameters: ${ansibleParams}"
+
+                    // Pass the parameters to Ansible
+                    ansiblePlaybook(
+                        playbook: 'your-playbook.yml',
+                        extraVars: ansibleParams
+                    )
+                }
+            }
+        }
+    }
+}
