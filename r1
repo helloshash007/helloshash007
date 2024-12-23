@@ -1,0 +1,35 @@
+pipeline {
+    agent any
+    stages {
+        stage('Select First Choice') {
+            steps {
+                script {
+                    // First dropdown with fixed options
+                    firstChoice = input message: 'Choose the first option:', parameters: [
+                        choice(name: 'FirstChoice', choices: ['ABC', 'ABC2'], description: 'Select a category')
+                    ]
+                    echo "You selected: ${firstChoice}"
+                }
+            }
+        }
+        stage('Select Second Choice') {
+            steps {
+                script {
+                    // Conditional logic to determine the second dropdown options
+                    def secondChoices = []
+                    if (firstChoice == 'ABC') {
+                        secondChoices = ['Choice1', 'Choice2', 'Choice3', 'Choice4']
+                    } else if (firstChoice == 'ABC2') {
+                        secondChoices = ['Choice5', 'Choice6', 'Choice7', 'Choice8']
+                    }
+                    
+                    // Second dropdown with conditional options
+                    secondChoice = input message: 'Choose the second option:', parameters: [
+                        choice(name: 'SecondChoice', choices: secondChoices.join('\n'), description: 'Select an option based on your first choice')
+                    ]
+                    echo "You selected: ${secondChoice}"
+                }
+            }
+        }
+    }
+}
