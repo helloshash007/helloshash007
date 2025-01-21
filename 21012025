@@ -1,0 +1,40 @@
+- name: Validate Service from ServiceNow CR
+  hosts: localhost
+  gather_facts: no
+  vars:
+    servicenow_instance: "your-instance.service-now.com"
+    servicenow_user: "your-username"
+    servicenow_password: "your-password"
+    change_request_sys_id: "your-cr-sys-id"
+    expected_services: ["ABC", "BCC", "cdd"]  # List of expected services
+
+  tasks:
+    - name: Fetch ServiceNow Change Request details
+      uri:
+        url: "https://{{ servicenow_instance }}/api/now/table/change_request/{{ change_request_sys_id }}"
+        method: GET
+        user: "{{ servicenow_user }}"
+        password: "{{ servicenow_password }}"
+        force_basic_auth: yes
+        return_content: yes
+        headers:
+          Accept: "application/json"
+      register: servicenow_response
+      delegate_to: localhost
+
+    - name: Extract service description from CR
+      set_fact:
+        cr_description: "{{ servicenow_response.json.result.description | default('') }}"
+
+    - name: Extract services from description
+      set_fact:
+        extracted_services: "{{ cr_description | regex_findall('[A-Za-z0-9]+') }}"
+
+    - name: Check if any expected service is present
+      fail:
+        msg: "No matching service found in CR description! Expected: {{ expected_services }}, Found: {{ extracted_services }}"
+      when: extracted_services | intersect(expected_services) | length == 0
+
+    - name: Proceed with next steps if service matches
+      debug:
+        msg: "Service matches. Proceeding..."
