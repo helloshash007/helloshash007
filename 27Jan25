@@ -1,0 +1,29 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'NEXUS_URL', defaultValue: 'nexus:8080', description: 'Base Nexus URL')
+        string(name: 'SERVICE_NAME', defaultValue: 'ABC/service', description: 'Service Name')
+        string(name: 'VERSION', defaultValue: 'latest', description: 'Version of the service')
+    }
+
+    stages {
+        stage('Build Nexus URL') {
+            steps {
+                script {
+                    def fullUrl = "${params.NEXUS_URL}/${params.SERVICE_NAME}:${params.VERSION}"
+                    echo "Constructed URL: ${fullUrl}"
+
+                    // Call Ansible Tower
+                    ansibleTower(
+                        jobTemplate: 'Your_Ansible_Job_Template',
+                        inventory: 'Your_Inventory',
+                        extraVars: [
+                            service_url: fullUrl
+                        ]
+                    )
+                }
+            }
+        }
+    }
+}
