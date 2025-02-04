@@ -1,0 +1,133 @@
+You can enhance your Confluence document with additional details and a flow diagram. Here's an improved structure:
+
+
+---
+
+Automated Deployment of IKP Microservices Using Jenkins, Ansible & Shell Script
+
+1. Overview
+
+This document provides a detailed workflow of how Jenkins, Ansible, and Shell scripts are used to automate the deployment of IKP microservices across environments.
+
+2. Deployment Flow Diagram
+
+(A flow diagram showcasing the end-to-end process from code commit to production deployment.)
+
+Flow Steps:
+
+1. Code Commit & Push → Developer pushes code to Git repository.
+
+
+2. Jenkins Trigger → Jenkins detects changes and starts the pipeline.
+
+
+3. Version Check & Git Change Recording → Logs commit ID and branch details.
+
+
+4. Artifact Retrieval → Fetches the correct package from Nexus Docker registry.
+
+
+5. Pre-Deployment Checks → Validates system resources, configurations, and existing versions.
+
+
+6. Ansible Deployment → Ansible playbook deploys the microservice.
+
+
+7. Post-Deployment Validation → Health check APIs confirm service is running.
+
+
+8. Logging & Notifications → Deployment status is recorded and shared.
+
+
+
+
+---
+
+3. Detailed Deployment Steps
+
+Step 1: Jenkins Pipeline Execution
+
+Jenkins pipeline is manually triggered or automatically starts on a Git push.
+
+Captures parameters like:
+
+Git branch
+
+Application version
+
+Target environment
+
+
+
+Step 2: Version Control & Change Management
+
+Git commit ID and branch name are logged.
+
+Change history is recorded in a dedicated tracking system.
+
+
+Step 3: Fetching Artifacts from Nexus
+
+Retrieves the correct version of the microservice Docker image.
+
+Ensures checksum verification for integrity.
+
+
+Step 4: Pre-Deployment Validation
+
+Ansible checks if a previous version is running.
+
+Validates system resource availability (CPU, memory).
+
+Ensures required configurations are in place.
+
+
+Step 5: Deployment with Ansible
+
+Pulls the Docker image from Nexus.
+
+Updates configuration files if necessary.
+
+Starts the new service instance.
+
+
+Step 6: Post-Deployment Health Checks
+
+Calls the microservice health API to ensure successful deployment.
+
+Logs deployment status in Confluence or a monitoring tool.
+
+
+Step 7: Notification & Logging
+
+Sends deployment notifications via Slack or email.
+
+Records all details (commit ID, package version, environment, etc.).
+
+
+
+---
+
+4. Key Features & Benefits
+
+✅ End-to-End Traceability: Git commit linked to deployment history.
+✅ Automated Artifact Management: Verified package retrieval from Nexus.
+✅ Pre & Post Checks: Ensures zero-downtime deployments.
+✅ Fully Automated: Reduces manual intervention and errors.
+
+
+---
+
+5. Flow Diagram
+
+To add a flow diagram in Confluence:
+
+Use the draw.io plugin in Confluence.
+
+OR create a Visio/Lucidchart diagram and embed it.
+
+OR draw using PlantUML in Confluence (for text-based diagrams).
+
+
+Would you like me to help design the flow diagram?
+
