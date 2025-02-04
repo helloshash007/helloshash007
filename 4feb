@@ -1,0 +1,208 @@
+Here's your complete Confluence documentation for the Jenkins-Ansible-Shell Script Deployment Process with all requested steps, including the new Ansible validations.
+
+
+---
+
+IKP Microservices Deployment Process
+
+Introduction
+
+This document describes the end-to-end deployment process for IKP microservices using Jenkins, Ansible, and Shell Scripts. The process ensures a seamless, automated deployment while maintaining version control and consistency across environments.
+
+
+---
+
+High-Level Flow Diagram
+
+(Add a flow diagram here using tools like draw.io, Lucidchart, or Confluence Diagrams.)
+
+
+---
+
+1. Jenkins Pipeline Execution
+
+Step 1: Passing Parameters to Jenkins
+
+Jenkins pipeline receives user-input parameters (e.g., Service Name, Version, Environment).
+
+Parameters are stored as environment variables for further steps.
+
+
+Step 2: Launching Ansible Job with Extra Variables
+
+Jenkins triggers an Ansible Tower Job and passes extra variables, including:
+
+service_name
+
+version
+
+environment
+
+git_branch
+
+nexus_url
+
+
+
+Step 3: Handling Ansible Job Execution & Validation
+
+Ansible job ID is generated and passed to Jenkins.
+
+If the job execution fails, Jenkins marks the pipeline as FAILED; otherwise, it continues.
+
+
+
+---
+
+2. Ansible Execution
+
+Step 1: Debugging Environment Variables
+
+Ansible validates environment variables before proceeding.
+
+
+Step 2: Defining Directory Paths
+
+The target directory path is dynamically defined based on the service name and version.
+
+
+Step 3: Checking & Removing Duplicate Directories
+
+If the target directory already exists, it is deleted to prevent duplication.
+
+
+Step 4: CR Validation
+
+Ansible checks if the Change Request (CR) is approved before proceeding.
+
+
+Step 5: Docker Package Validation
+
+Verify that the correct Docker package version is available in Nexus.
+
+If the package is missing or incorrect, the job fails.
+
+
+Step 6: Git Version Validation of Playbook
+
+Ansible ensures the correct Git version of the playbook is being used.
+
+The playbook version is validated against a predefined reference.
+
+
+Step 7: Package ID Validation
+
+Ensure the Package ID matches the expected deployment version.
+
+
+Step 8: Downloading Deployment Script
+
+The required deployment script is fetched from a Git repository or a Nexus repository.
+
+
+Step 9: Creating a Version-Specific Folder Structure
+
+A directory is created in the format:
+
+/deployments/{service_name}/{version}/
+
+
+Step 10: Running Shell Script with Variables
+
+Ansible executes the shell script with necessary parameters.
+
+
+Step 11: Displaying Formatted Output
+
+Deployment logs are structured and formatted for better readability.
+
+
+Step 12: Removing Deployment Script
+
+Post-deployment cleanup ensures no redundant scripts remain.
+
+
+
+---
+
+3. Shell Script Execution
+
+Step 1: Assigning Arguments to Variables
+
+Input arguments received from Ansible are assigned to shell variables.
+
+
+Step 2: Defining Environment Variables for prod/DR/Perf
+
+Environment-specific variables are configured.
+
+
+Step 3: Cloning Git Repository
+
+The deployment repository is cloned to fetch required manifests.
+
+
+Step 4: Creating Variables for Manifest Paths
+
+Paths for deploy.yaml and config.yml are defined dynamically.
+
+
+Step 5: Validating Artifact Availability
+
+The presence of required artifacts (e.g., Docker images) is checked.
+
+
+Step 6: Checking Manifest Files
+
+Ensures deploy.yaml and config.yml exist before applying them.
+
+
+Step 7: Modifying Docker Image & Kafka Parameters in the Manifest
+
+sed commands modify Docker image tags and Kafka configurations.
+
+
+Step 8: Generating Kubernetes Token
+
+Retrieves authentication token for Kubernetes deployment.
+
+
+Step 9: Setting Up Kubernetes Configuration
+
+Kubernetes context is set for deployment.
+
+
+Step 10: Applying Kubernetes Deployment
+
+The updated manifests are applied using kubectl apply.
+
+
+Step 11: Viewing Kubernetes Config
+
+kubectl get configmaps is used for verification.
+
+
+Step 12: Describing Pod Status
+
+kubectl describe pod <pod-name> checks deployment status.
+
+
+Step 13: Logging Final Status
+
+The final deployment result (Success/Failure) is logged.
+
+
+
+---
+
+Conclusion
+
+This document provides a structured approach for deploying IKP microservices. By integrating Jenkins, Ansible, and Shell scripting, the process ensures automation, consistency, and error handling.
+
+
+---
+
+Next Steps
+
+Would you like Ansible playbook snippets for the new validation steps, or should I help you create the flow diagram next?
+
