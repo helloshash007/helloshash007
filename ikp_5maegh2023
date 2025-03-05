@@ -1,0 +1,126 @@
+Here’s an Ansible playbook that does the following:
+
+1. Logs into HashiCorp Vault using a provided token.
+
+
+2. Retrieves OIDC, API, and IDP certificates.
+
+
+3. Configures kubectl with the retrieved certificates.
+
+
+4. Performs kubectl scale to stop/start/restart IKP services.
+
+
+
+
+---
+
+Playbook: ikp_k8s_manage.yml
+
+---
+- name: Manage IKP Kubernetes Services via Vault Authentication
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vault_addr: "https://vault.example.com"
+    vault_token: "your-vault-token"
+    oidc_cert_path: "/tmp/oidc_cert.pem"
+    api_cert_path: "/tmp/api_cert.pem"
+    idp_cert_path: "/tmp/idp_cert.pem"
+    cluster_name: "my-cluster"
+    namespace: "default"
+    deployment_name: "ikp-service"
+    action: "restart"  # stop, start, restart
+    replicas: 1  # Desired number of replicas for start/restart
+
+  tasks:
+    - name: Authenticate with Vault and get OIDC temp token
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/auth/oidc/oidc_temp_token | jq -r '.data.token'
+      register: oidc_token
+
+    - name: Retrieve OIDC certificate
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/secret/data/k8s/oidc_cert | jq -r '.data.data.cert' > {{ oidc_cert_path }}
+
+    - name: Retrieve API certificate
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/secret/data/k8s/api_cert | jq -r '.data.data.cert' > {{ api_cert_path }}
+
+    - name: Retrieve IDP certificate
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/secret/data/k8s/idp_cert | jq -r '.data.data.cert' > {{ idp_cert_path }}
+
+    - name: Configure Kubernetes cluster with certificates
+      shell: |
+        kubectl config set-cluster {{ cluster_name }} --certificate-authority={{ oidc_cert_path }}
+
+    - name: Perform IKP OIDC login
+      shell: |
+        ikp oidc login --token {{ oidc_token.stdout }}
+
+    - name: Stop Deployment (Scale to 0)
+      command: kubectl scale deployment/{{ deployment_name }} --replicas=0 -n {{ namespace }}
+      when: action == "stop" or action == "restart"
+
+    - name: Wait for pods to terminate
+      command: kubectl get pods -n {{ namespace }}
+      register: pod_status
+      until: '"No resources found" in pod_status.stdout'
+      retries: 10
+      delay: 5
+      when: action == "stop" or action == "restart"
+
+    - name: Start Deployment (Scale to desired replicas)
+      command: kubectl scale deployment/{{ deployment_name }} --replicas={{ replicas }} -n {{ namespace }}
+      when: action == "start" or action == "restart"
+
+    - name: Verify Deployment Status
+      command: kubectl get pods -n {{ namespace }}
+      register: result
+      until: "'Running' in result.stdout"
+      retries: 10
+      delay: 5
+      when: action == "start" or action == "restart"
+
+    - name: Display Current Pod Status
+      debug:
+        msg: "{{ result.stdout }}"
+      when: action == "start" or action == "restart"
+
+
+---
+
+Usage Examples
+
+Stop IKP Services
+
+ansible-playbook ikp_k8s_manage.yml -e "action=stop"
+
+Start IKP Services with Specific Replicas
+
+ansible-playbook ikp_k8s_manage.yml -e "action=start replicas=3"
+
+Restart IKP Services with Custom Replicas
+
+ansible-playbook ikp_k8s_manage.yml -e "action=restart replicas=5"
+
+
+---
+
+This playbook ensures:
+
+Secure authentication using Vault.
+
+Configuring kubectl with dynamically retrieved certificates.
+
+Managing IKP services effectively.
+
+
+Let me know if you need modifications!
+
