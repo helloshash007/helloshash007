@@ -1,0 +1,98 @@
+---
+- name: Manage IKP Kubernetes Services via Vault Authentication
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vault_addr: "https://vault.example.com"
+    vault_token: "your-vault-token"
+    oidc_cert_path: "/tmp/oidc_cert.pem"
+    api_cert_path: "/tmp/api_cert.pem"
+    idp_cert_path: "/tmp/idp_cert.pem"
+    cluster_name: "my-cluster"
+    namespace: "default"
+    service_name: "all"  # Provide "all" to scale all services or a specific service name
+    action: "restart"  # Options: stop, start, restart
+    replicas: 1  # Desired number of replicas for start/restart
+
+  tasks:
+    - name: Authenticate with Vault and get OIDC temp token
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/auth/oidc/oidc_temp_token | jq -r '.data.token'
+      register: oidc_token
+
+    - name: Retrieve OIDC certificate
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/secret/data/k8s/oidc_cert | jq -r '.data.data.cert' > {{ oidc_cert_path }}
+
+    - name: Retrieve API certificate
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/secret/data/k8s/api_cert | jq -r '.data.data.cert' > {{ api_cert_path }}
+
+    - name: Retrieve IDP certificate
+      shell: |
+        curl --header "X-Vault-Token: {{ vault_token }}" \
+             {{ vault_addr }}/v1/secret/data/k8s/idp_cert | jq -r '.data.data.cert' > {{ idp_cert_path }}
+
+    - name: Configure Kubernetes cluster with certificates
+      shell: |
+        kubectl config set-cluster {{ cluster_name }} --certificate-authority={{ oidc_cert_path }}
+
+    - name: Perform IKP OIDC login
+      shell: |
+        ikp oidc login --token {{ oidc_token.stdout }}
+
+    - name: Define scale command based on service_name
+      set_fact:
+        scale_command: >-
+          kubectl scale deployment --all --replicas=0 -n {{ namespace }}
+      when: service_name == "all"
+
+    - name: Define scale command for a specific service
+      set_fact:
+        scale_command: >-
+          kubectl scale deployment/{{ service_name }} --replicas=0 -n {{ namespace }}
+      when: service_name != "all"
+
+    - name: Stop Deployment (Scale to 0)
+      command: "{{ scale_command }}"
+      when: action == "stop" or action == "restart"
+
+    - name: Wait for pods to terminate
+      command: kubectl get pods -n {{ namespace }}
+      register: pod_status
+      until: '"No resources found" in pod_status.stdout'
+      retries: 10
+      delay: 5
+      when: action == "stop" or action == "restart"
+
+    - name: Define start command based on service_name
+      set_fact:
+        start_command: >-
+          kubectl scale deployment --all --replicas={{ replicas }} -n {{ namespace }}
+      when: service_name == "all"
+
+    - name: Define start command for a specific service
+      set_fact:
+        start_command: >-
+          kubectl scale deployment/{{ service_name }} --replicas={{ replicas }} -n {{ namespace }}
+      when: service_name != "all"
+
+    - name: Start Deployment (Scale to desired replicas)
+      command: "{{ start_command }}"
+      when: action == "start" or action == "restart"
+
+    - name: Verify Deployment Status
+      command: kubectl get pods -n {{ namespace }}
+      register: result
+      until: "'Running' in result.stdout"
+      retries: 10
+      delay: 5
+      when: action == "start" or action == "restart"
+
+    - name: Display Current Pod Status
+      debug:
+        msg: "{{ result.stdout }}"
+      when: action == "start" or action == "restart"
