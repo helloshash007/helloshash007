@@ -1,0 +1,36 @@
+---
+- name: Configure Kubernetes using Vault and OIDC
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Generating Kubernetes token
+      shell: |
+        echo "Setting up certificates"
+        oidc_certs=$(curl -sk -H "X-Vault-Token: {{ hashi_token }}" -X GET "{{ olde_vault }}")
+        
+        echo "Extracting API and OIDC certificates"
+        apicert=$(echo "$oidc_certs" | jq -r '.data.apicert')
+        idpcert=$(echo "$oidc_certs" | jq -r '.data.idpcert')
+        
+        echo "Fetching OIDC tokens"
+        oidc_temp=$(curl -sku "{{ USERNAME }}:{{ PASSWORD }}" -X GET "{{ idpapi }}")
+        
+        echo "Extracting ID and Refresh tokens"
+        oidc_id_token=$(echo "$oidc_temp" | jq -r '.token.id_token')
+        oidc_refresh_token=$(echo "$oidc_temp" | jq -r '.token.refresh_token')
+
+        echo "$apicert" | base64 -d > /tmp/cert
+        echo "Kubernetes certificate generated"
+
+        echo "Configuring Kubernetes"
+        kubectl config set-cluster kubernetes --server="{{ apiserver }}"
+        kubectl config set-credentials "{{ USERNAME }}" --auth-provider=oidc --auth-provider-arg=idp-issuer-url="{{ idpissuer }}" --auth-provider-arg=client-id=kubernetes
+        kubectl config set-context kubernetes --cluster=kubernetes --user="{{ USERNAME }}"
+        kubectl config use-context kubernetes
+
+        chmod 755 /opt/disk1/gls_release/{{ SERVICE_NAME }}/{{ version }}/*
+        rm -rf /home/glsappuser/.kube/cache
+        cp ./kubeconfigfile /home/glsappuser/.kube/config
+        export KUBECONFIG=./kubeconfigfile
+
+      register: kubernetes_config_output
