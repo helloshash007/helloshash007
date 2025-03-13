@@ -1,0 +1,1137 @@
+Microservices and Spring Boot Architecture
+
+1. What Are Microservices?
+
+Microservices is an architectural style that structures an application as a collection of small, independent services. Each service focuses on a specific business functionality and communicates with others via lightweight protocols like REST, gRPC, or messaging queues.
+
+2. Key Characteristics of Microservices
+
+Independent Deployment: Each service can be deployed independently.
+
+Scalability: Services can be scaled individually based on demand.
+
+Loose Coupling: Services interact through APIs, reducing dependencies.
+
+Technology Agnostic: Each service can use different tech stacks.
+
+Resilience: Failure of one service does not bring down the entire system.
+
+
+3. Why Use Spring Boot for Microservices?
+
+Spring Boot simplifies microservices development by providing:
+
+Embedded servers (Tomcat, Jetty) for quick deployment.
+
+Spring Cloud for distributed system patterns like service discovery, config management, and circuit breakers.
+
+Built-in support for REST APIs, security, and monitoring.
+
+
+4. Microservices Architecture with Spring Boot
+
+A typical Spring Boot microservices architecture includes:
+
+1. API Gateway (Spring Cloud Gateway / Zuul)
+
+Central entry point for all client requests.
+
+Handles authentication, rate limiting, and routing to backend services.
+
+
+
+2. Service Registry (Eureka, Consul, or Zookeeper)
+
+Keeps track of available services and their locations.
+
+
+
+3. Configuration Server (Spring Cloud Config)
+
+Centralized configuration management for all services.
+
+
+
+4. Microservices (Spring Boot Services)
+
+Each service handles a specific business functionality (e.g., User Service, Order Service).
+
+Uses REST or gRPC for communication.
+
+
+
+5. Database per Service
+
+Each microservice has its own database (SQL/NoSQL) to ensure loose coupling.
+
+
+
+6. Inter-service Communication (Feign Client, RestTemplate, gRPC, Kafka, RabbitMQ)
+
+Services communicate asynchronously using messaging queues or synchronously via HTTP/gRPC.
+
+
+
+7. Security (Spring Security, OAuth2, JWT)
+
+Ensures secure communication between clients and services.
+
+
+
+8. Monitoring & Logging (Prometheus, Grafana, ELK, Zipkin)
+
+Tracks service performance and logs errors for troubleshooting.
+
+
+
+
+5. Deployment Strategies
+
+Docker & Kubernetes for containerization and orchestration.
+
+CI/CD Pipelines with Jenkins, GitLab CI, or GitHub Actions.
+
+Cloud Platforms (AWS, GCP, Azure) for scalability and reliability.
+
+
+Would you like an example of a Spring Boot microservice setup or a specific implementation detail?
+
+
+
+Spring Boot Microservices Example
+
+Let’s build a simple microservices architecture with Spring Boot, where we have:
+
+1. API Gateway (Spring Cloud Gateway)
+
+
+2. Service Registry (Eureka)
+
+
+3. Two Microservices (User Service and Order Service)
+
+
+4. Inter-service Communication using OpenFeign
+
+
+
+
+---
+
+1. Create Eureka Service Registry
+
+Dependencies:
+
+Spring Boot
+
+Spring Cloud Netflix Eureka Server
+
+
+Steps:
+
+1. Create a Spring Boot application named eureka-server.
+
+
+2. Add dependencies in pom.xml:
+
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-eureka-server</artifactId>
+</dependency>
+
+
+3. Add this annotation in EurekaServerApplication.java:
+
+@SpringBootApplication
+@EnableEurekaServer
+public class EurekaServerApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(EurekaServerApplication.class, args);
+    }
+}
+
+
+4. Configure application.yml:
+
+server:
+  port: 8761
+
+eureka:
+  instance:
+    hostname: localhost
+  client:
+    registerWithEureka: false
+    fetchRegistry: false
+
+
+5. Run the application and visit http://localhost:8761/ to see the Eureka dashboard.
+
+
+
+
+---
+
+2. Create User Service (Microservice 1)
+
+Dependencies:
+
+Spring Web
+
+Spring Cloud Starter OpenFeign
+
+Spring Cloud Netflix Eureka Client
+
+Spring Boot Data JPA (for database access)
+
+
+Steps:
+
+1. Create a Spring Boot application named user-service.
+
+
+2. Add dependencies in pom.xml:
+
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-openfeign</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-jpa</artifactId>
+</dependency>
+
+
+3. Configure application.yml:
+
+server:
+  port: 8081
+
+spring:
+  application:
+    name: user-service
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
+
+
+4. Create User.java model:
+
+@Entity
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String name;
+    private String email;
+
+    // Getters and Setters
+}
+
+
+5. Create UserRepository.java:
+
+public interface UserRepository extends JpaRepository<User, Long> {}
+
+
+6. Create UserController.java:
+
+@RestController
+@RequestMapping("/users")
+public class UserController {
+    @Autowired
+    private UserRepository userRepository;
+
+    @GetMapping("/{id}")
+    public User getUserById(@PathVariable Long id) {
+        return userRepository.findById(id).orElse(null);
+    }
+}
+
+
+
+
+---
+
+3. Create Order Service (Microservice 2)
+
+Dependencies:
+Same as User Service + OpenFeign for inter-service communication.
+
+Steps:
+
+1. Create a new Spring Boot project named order-service.
+
+
+2. Configure application.yml:
+
+server:
+  port: 8082
+
+spring:
+  application:
+    name: order-service
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
+
+
+3. Create Feign Client for calling User Service:
+
+@FeignClient(name = "user-service")
+public interface UserClient {
+    @GetMapping("/users/{id}")
+    User getUserById(@PathVariable Long id);
+}
+
+
+4. Create Order.java model:
+
+public class Order {
+    private Long id;
+    private String product;
+    private Long userId;
+    private User user;
+}
+
+
+5. Create OrderController.java:
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+    @Autowired
+    private UserClient userClient;
+
+    @GetMapping("/{id}")
+    public Order getOrder(@PathVariable Long id) {
+        Order order = new Order();
+        order.setId(id);
+        order.setProduct("Laptop");
+        order.setUserId(1L);
+        order.setUser(userClient.getUserById(order.getUserId()));
+        return order;
+    }
+}
+
+
+
+
+---
+
+4. API Gateway (Spring Cloud Gateway)
+
+Dependencies:
+
+Spring Cloud Gateway
+
+Spring Cloud Netflix Eureka Client
+
+
+Steps:
+
+1. Create a new Spring Boot project named api-gateway.
+
+
+2. Configure application.yml:
+
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: user-service
+          uri: lb://user-service
+          predicates:
+            - Path=/users/**
+        - id: order-service
+          uri: lb://order-service
+          predicates:
+            - Path=/orders/**
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
+
+
+3. Run the application. Now all requests go through API Gateway:
+
+http://localhost:8080/users/1
+http://localhost:8080/orders/1
+
+
+
+
+---
+
+5. Running the Services
+
+1. Start Eureka Server (eureka-server).
+
+
+2. Start User Service (user-service).
+
+
+3. Start Order Service (order-service).
+
+
+4. Start API Gateway (api-gateway).
+
+
+
+Now, Order Service fetches user details from User Service via OpenFeign, and all requests are routed through API Gateway.
+
+
+---
+
+6. Enhancements
+
+Database per Microservice (Use MySQL/PostgreSQL with JPA).
+
+Security (JWT, OAuth2).
+
+Circuit Breaker (Resilience4j).
+
+Logging & Monitoring (ELK Stack, Zipkin for tracing).
+
+Kubernetes & Docker for deployment.
+
+
+Would you like a sample Docker Compose file or Kubernetes manifests for deployment?
+
+
+
+Here are answers to key Spring Boot Microservices interview questions:
+
+
+---
+
+Basic Questions & Answers
+
+1. What are microservices?
+Microservices is an architectural style where an application is composed of small, loosely coupled, independently deployable services. Each service focuses on a specific business function and communicates via APIs (REST/gRPC).
+
+
+2. How does Spring Boot help in building microservices?
+Spring Boot provides:
+
+Embedded servers (Tomcat, Jetty) for easy deployment.
+
+Spring Cloud for service discovery, configuration management, and circuit breakers.
+
+Auto-configuration to reduce boilerplate code.
+
+
+
+3. What are the key components of a microservices architecture?
+
+API Gateway (Spring Cloud Gateway): Manages routing, authentication, and rate limiting.
+
+Service Registry (Eureka, Consul): Keeps track of available services.
+
+Inter-service Communication (Feign, Kafka, RabbitMQ): Helps services talk to each other.
+
+Configuration Management (Spring Cloud Config): Centralized configuration.
+
+Load Balancing (Ribbon, Kubernetes): Distributes traffic.
+
+
+
+4. What is Spring Cloud?
+Spring Cloud is a set of tools that help build resilient, scalable microservices by providing solutions for service discovery, load balancing, distributed configuration, and fault tolerance.
+
+
+5. What is service discovery? How does Eureka work?
+
+Service discovery helps microservices find each other dynamically without hardcoded URLs.
+
+Eureka (Netflix OSS):
+
+Services register with the Eureka server.
+
+Clients fetch service details to communicate dynamically.
+
+
+
+
+6. What is the difference between monolithic and microservices architecture?
+
+Monolithic: Single-codebase, tightly coupled, hard to scale.
+
+Microservices: Independently deployable, loosely coupled, scalable.
+
+
+
+7. What is an API Gateway? How does Spring Cloud Gateway work?
+
+API Gateway is the entry point for client requests.
+
+Spring Cloud Gateway handles:
+
+Routing requests to appropriate microservices.
+
+Authentication, authorization.
+
+Load balancing and logging.
+
+
+
+
+8. How do microservices communicate?
+
+Synchronous (REST, gRPC) – Simple but
+
+
+
+Spring Boot Microservices Interview Questions and Answers
+
+
+---
+
+Basic Questions & Answers
+
+1. What are microservices?
+Microservices is an architectural style where an application is composed of small, loosely coupled, independently deployable services. Each service focuses on a specific business function and communicates via APIs (REST/gRPC).
+
+
+2. How does Spring Boot help in building microservices?
+Spring Boot simplifies microservices development by providing:
+
+Embedded servers (Tomcat, Jetty) for easy deployment.
+
+Spring Cloud for service discovery, configuration management, and circuit breakers.
+
+Auto-configuration to reduce boilerplate code.
+
+
+
+3. What are the key components of a microservices architecture?
+
+API Gateway (Spring Cloud Gateway): Manages routing, authentication, and rate limiting.
+
+Service Registry (Eureka, Consul): Keeps track of available services.
+
+Inter-service Communication (Feign, Kafka, RabbitMQ): Helps services talk to each other.
+
+Configuration Management (Spring Cloud Config): Centralized configuration.
+
+Load Balancing (Ribbon, Kubernetes): Distributes traffic.
+
+
+
+4. What is Spring Cloud?
+Spring Cloud is a set of tools that help build resilient, scalable microservices by providing solutions for service discovery, load balancing, distributed configuration, and fault tolerance.
+
+
+5. What is service discovery? How does Eureka work?
+
+Service discovery helps microservices find each other dynamically without hardcoded URLs.
+
+Eureka (Netflix OSS):
+
+Services register with the Eureka server.
+
+Clients fetch service details dynamically.
+
+
+
+
+6. What is the difference between monolithic and microservices architecture?
+
+Monolithic: Single-codebase, tightly coupled, hard to scale.
+
+Microservices: Independently deployable, loosely coupled, scalable.
+
+
+
+7. What is an API Gateway? How does Spring Cloud Gateway work?
+
+API Gateway is the entry point for client requests.
+
+Spring Cloud Gateway handles:
+
+Routing requests to appropriate microservices.
+
+Authentication, authorization.
+
+Load balancing and logging.
+
+
+
+
+8. How do microservices communicate?
+
+Synchronous (REST, gRPC) – Simple but tightly coupled.
+
+Asynchronous (Kafka, RabbitMQ) – Better for scalability and decoupling.
+
+
+
+9. What is the role of Feign Client in Spring Boot?
+
+Feign is a declarative REST client that simplifies inter-service communication.
+
+Example:
+
+@FeignClient(name = "user-service")
+public interface UserClient {
+    @GetMapping("/users/{id}")
+    User getUserById(@PathVariable Long id);
+}
+
+
+
+
+
+---
+
+Intermediate Questions & Answers
+
+10. What is Spring Cloud Config? Why is it useful?
+
+Centralized configuration management for microservices.
+
+Stores properties in Git or other repositories.
+
+Enables dynamic configuration updates without redeploying services.
+
+
+
+11. What are circuit breakers in microservices?
+
+Prevents cascading failures when a service is down.
+
+Resilience4j is used to implement circuit breakers.
+
+Example:
+
+@CircuitBreaker(name = "orderService", fallbackMethod = "fallbackOrder")
+public String getOrder() {
+    return restTemplate.getForObject("http://order-service/orders", String.class);
+}
+
+
+
+12. What is Hystrix? Why is it deprecated?
+
+Hystrix was Netflix’s circuit breaker library.
+
+It’s deprecated in favor of Resilience4j, which is lightweight and more flexible.
+
+
+
+13. What is synchronous vs. asynchronous communication in microservices?
+
+Synchronous: Services call each other directly (REST, gRPC).
+
+Asynchronous: Uses event-driven mechanisms like Kafka, RabbitMQ.
+
+
+
+14. How do you handle distributed transactions in microservices?
+
+Saga Pattern (Choreography or Orchestration).
+
+Eventual Consistency using message queues.
+
+
+
+15. What is load balancing? How does Ribbon help?
+
+Load balancing distributes requests across multiple instances.
+
+Ribbon (deprecated) was a client-side load balancer.
+
+Now, Spring Cloud LoadBalancer or Kubernetes Service Discovery is used.
+
+
+
+16. What is the difference between RestTemplate and WebClient?
+
+RestTemplate (Blocking) – Used in older applications.
+
+WebClient (Non-blocking, reactive) – Preferred for modern microservices.
+
+
+
+17. How do you secure microservices using JWT/OAuth2?
+
+Use Spring Security with OAuth2 for authentication.
+
+JWT (JSON Web Token) is used for stateless authentication.
+
+Example:
+
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    http.oauth2ResourceServer(OAuth2ResourceServerConfigurer::jwt);
+    return http.build();
+}
+
+
+
+18. How do you implement centralized logging in microservices?
+
+Use ELK Stack (Elasticsearch, Logstash, Kibana).
+
+Use Zipkin or Jaeger for distributed tracing.
+
+
+
+
+
+---
+
+Advanced Questions & Answers
+
+19. How does Kubernetes help in deploying microservices?
+
+Manages microservices using pods and deployments.
+
+Auto-scaling based on traffic.
+
+Service discovery with Kubernetes Services.
+
+
+
+20. What is the CAP theorem, and how does it apply to microservices?
+
+CAP Theorem: Consistency, Availability, Partition Tolerance – you can only achieve two at a time.
+
+Microservices prioritize Availability and Partition Tolerance over strict consistency.
+
+
+
+21. What is eventual consistency, and how do you handle it in microservices?
+
+Eventual consistency allows data to become consistent over time instead of immediately.
+
+Handled using message queues (Kafka, RabbitMQ) and retry mechanisms.
+
+
+
+22. How do you scale microservices dynamically?
+
+Use Kubernetes Horizontal Pod Autoscaler (HPA).
+
+Implement load balancing and caching (Redis, CDN).
+
+
+
+23. What is service mesh? How does Istio help?
+
+Service Mesh (like Istio) manages microservices networking.
+
+Provides traffic management, security, and observability.
+
+
+
+24. What is the Saga pattern? How does it help in managing transactions?
+
+Saga ensures data consistency across microservices without distributed transactions.
+
+Types:
+
+Choreography (events trigger other services).
+
+Orchestration (central orchestrator coordinates services).
+
+
+
+
+25. How do you monitor microservices using Prometheus and Grafana?
+
+Prometheus collects metrics.
+
+Grafana visualizes them.
+
+Example setup:
+
+scrape_configs:
+  - job_name: 'spring-boot'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['localhost:8080']
+
+
+
+26. How do you implement zero-downtime deployment for microservices?
+
+Rolling updates using Kubernetes.
+
+Blue-Green deployment (switching traffic between two environments).
+
+Canary deployment (gradually shifting traffic).
+
+
+
+27. What is the difference between blue-green and canary deployment?
+
+Blue-Green: Two environments, switch instantly.
+
+Canary: Gradually roll out to a small % of users first.
+
+
+
+28. How do you test microservices (unit testing, integration testing, contract testing)?
+
+Unit Testing (JUnit, Mockito).
+
+Integration Testing (TestContainers, WireMock).
+
+Contract Testing (Pact).
+
+
+
+
+
+---
+
+Would you like code examples for any of these answers?
+
+Which specific topics or questions would you like code examples for? Here are some options:
+
+1. Feign Client Example
+
+
+2. Spring Cloud Config Example
+
+
+3. Circuit Breaker with Resilience4j
+
+
+4. JWT Authentication with Spring Security
+
+
+5. Kafka Integration for Asynchronous Communication
+
+
+6. Saga Pattern (Choreography or Orchestration)
+
+
+7. Logging with ELK (Elasticsearch, Logstash, Kibana)
+
+
+8. Distributed Tracing with Zipkin
+
+
+9. Prometheus & Grafana Monitoring Setup
+
+
+10. Blue-Green Deployment in Kubernetes
+
+
+
+Let me know which ones you need, and I'll provide detailed code snippets.
+
+
+Setting Up Kafka with Spring Boot Microservices
+
+Kafka is used in microservices for asynchronous communication, event-driven architecture, and message-based decoupling between services. Below is a step-by-step guide to integrating Kafka with Spring Boot microservices.
+
+
+---
+
+Step 1: Install & Start Kafka Locally
+
+Download and install Kafka if you don’t already have it:
+
+Start Zookeeper
+
+bin/zookeeper-server-start.sh config/zookeeper.properties
+
+Start Kafka
+
+bin/kafka-server-start.sh config/server.properties
+
+Create a Topic
+
+bin/kafka-topics.sh --create --topic order-topic --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+
+---
+
+Step 2: Add Kafka Dependencies in Spring Boot
+
+Add the following dependencies in pom.xml for Kafka integration:
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.kafka</groupId>
+    <artifactId>spring-kafka</artifactId>
+</dependency>
+
+
+---
+
+Step 3: Configure Kafka in application.yml
+
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: order-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+
+---
+
+Step 4: Create Kafka Producer (Order Service)
+
+The producer service will send order events to Kafka.
+
+OrderProducer.java
+
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.stereotype.Service;
+
+@Service
+public class OrderProducer {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    public OrderProducer(KafkaTemplate<String, String> kafkaTemplate) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    public void sendOrder(String order) {
+        kafkaTemplate.send("order-topic", order);
+        System.out.println("Order sent: " + order);
+    }
+}
+
+OrderController.java (REST API to send Kafka messages)
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+
+    private final OrderProducer orderProducer;
+
+    public OrderController(OrderProducer orderProducer) {
+        this.orderProducer = orderProducer;
+    }
+
+    @PostMapping("/send/{order}")
+    public String sendOrder(@PathVariable String order) {
+        orderProducer.sendOrder(order);
+        return "Order sent to Kafka: " + order;
+    }
+}
+
+Now, sending a POST request to http://localhost:8080/orders/send/Order123 will publish the message to Kafka.
+
+
+---
+
+Step 5: Create Kafka Consumer (Payment Service)
+
+The consumer service listens to Kafka and processes order messages.
+
+OrderConsumer.java
+
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Service;
+
+@Service
+public class OrderConsumer {
+
+    @KafkaListener(topics = "order-topic", groupId = "order-group")
+    public void consumeOrder(ConsumerRecord<String, String> record) {
+        System.out.println("Order received: " + record.value());
+        // Process order and trigger payment
+    }
+}
+
+
+---
+
+Step 6: Run and Test Kafka Communication
+
+1. Start Kafka and Zookeeper
+
+
+2. Run both Spring Boot microservices (OrderService & PaymentService).
+
+
+3. Send an order message:
+
+curl -X POST http://localhost:8080/orders/send/Order123
+
+
+4. Check logs in the consumer service:
+
+Order received: Order123
+
+
+
+
+---
+
+Step 7: Deploy Kafka in Kubernetes (Optional)
+
+For production environments, deploy Kafka and microservices in Kubernetes using Helm Charts.
+
+Would you like me to provide a Kubernetes YAML configuration for deploying Kafka and Spring Boot microservices?
+
+
+
+Here's a minimal Spring Boot application to connect to Apache Kafka and send/receive messages.
+
+
+---
+
+1. Add Dependencies in pom.xml
+
+Add the required Kafka dependencies:
+
+<dependency>
+    <groupId>org.springframework.kafka</groupId>
+    <artifactId>spring-kafka</artifactId>
+</dependency>
+
+
+---
+
+2. Configure Kafka in application.yml
+
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: my-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+
+---
+
+3. Kafka Producer (Send Messages to Kafka)
+
+Create a simple Kafka producer service.
+
+KafkaProducer.java
+
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.stereotype.Service;
+
+@Service
+public class KafkaProducer {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    public KafkaProducer(KafkaTemplate<String, String> kafkaTemplate) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    public void sendMessage(String message) {
+        kafkaTemplate.send("my-topic", message);
+        System.out.println("Message sent: " + message);
+    }
+}
+
+
+---
+
+4. Kafka Consumer (Receive Messages from Kafka)
+
+Create a Kafka consumer service that listens to Kafka messages.
+
+KafkaConsumer.java
+
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Service;
+
+@Service
+public class KafkaConsumer {
+
+    @KafkaListener(topics = "my-topic", groupId = "my-group")
+    public void listen(String message) {
+        System.out.println("Received Message: " + message);
+    }
+}
+
+
+---
+
+5. REST Controller (Send Messages via API)
+
+Create a simple REST endpoint to send messages.
+
+KafkaController.java
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/kafka")
+public class KafkaController {
+
+    private final KafkaProducer kafkaProducer;
+
+    public KafkaController(KafkaProducer kafkaProducer) {
+        this.kafkaProducer = kafkaProducer;
+    }
+
+    @GetMapping("/send/{message}")
+    public String sendMessage(@PathVariable String message) {
+        kafkaProducer.sendMessage(message);
+        return "Message sent to Kafka: " + message;
+    }
+}
+
+
+---
+
+6. Start Kafka & Test the Application
+
+Start Kafka Locally
+
+bin/zookeeper-server-start.sh config/zookeeper.properties
+bin/kafka-server-start.sh config/server.properties
+
+Create a Kafka Topic
+
+bin/kafka-topics.sh --create --topic my-topic --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+
+Run the Spring Boot Application
+
+Start your Spring Boot application and send a message:
+
+curl -X GET http://localhost:8080/kafka/send/HelloKafka
+
+Check Logs in Consumer Service
+
+Received Message: HelloKafka
+
+
+---
+
+This is a minimal Kafka producer-consumer setup in Spring Boot. Let me know if you need a Kubernetes deployment or Kafka with JSON messages!
+
