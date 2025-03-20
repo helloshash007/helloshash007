@@ -1,13 +1,27 @@
+- name: Debug All Job Variables
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Show All Variables
+      debug:
+        var: hostvars[inventory_hostname]
+
+
+ikp_username: "{{ tower_ikp_user }}"
+ikp_password: "{{ tower_ikp_password }}"
+hashi_token: "{{ tower_hashi_token }}"
+Vault_Token: "{{ tower_vault_token }}"
+
 - name: Retrieve IKP and Vault Credentials
   hosts: localhost
   gather_facts: no
   tasks:
-    - name: Set Credentials from Environment Variables
+    - name: Set Credentials from Extra Variables
       set_fact:
-        IKP_USER: "{{ lookup('ansible.builtin.env', 'IKP_USER_username') }}"
-        IKP_PASSWORD: "{{ lookup('ansible.builtin.env', 'IKP_USER_password') }}"
-        HASHI_TOKEN: "{{ lookup('ansible.builtin.env', 'ANSIBLE_VAULT_PASSWORD_hashi_token') }}"
-        VAULT_TOKEN: "{{ lookup('ansible.builtin.env', 'ANSIBLE_VAULT_PASSWORD_Vault_Token') }}"
+        IKP_USER: "{{ ikp_username }}"
+        IKP_PASSWORD: "{{ ikp_password }}"
+        HASHI_TOKEN: "{{ hashi_token }}"
+        VAULT_TOKEN: "{{ Vault_Token }}"
 
     - name: Debug All Credentials
       debug:
