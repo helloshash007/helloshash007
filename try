@@ -1,0 +1,13 @@
+- name: Get IKP and Vault Credentials
+  set_fact:
+    ikp_user: "{{ lookup('ansible.builtin.env', 'TOWER_IKP_USER') }}"
+    ikp_pass: "{{ lookup('ansible.builtin.env', 'TOWER_IKP_PASSWORD') }}"
+    hashi_token: "{{ lookup('ansible.builtin.env', 'TOWER_HASHI_TOKEN') }}"
+
+- name: Authenticate with Vault
+  shell: |
+    vault login {{ hashi_token }}
+
+- name: Use IKP Credentials
+  shell: |
+    some_command --user {{ ikp_user }} --password {{ ikp_pass }}
