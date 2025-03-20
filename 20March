@@ -30,3 +30,28 @@ Vault_Token: "{{ tower_vault_token }}"
           - "IKP_PASSWORD: {{ IKP_PASSWORD | default('Not Set') }}"
           - "HASHI_TOKEN: {{ HASHI_TOKEN | default('Not Set') }}"
           - "VAULT_TOKEN: {{ VAULT_TOKEN | default('Not Set') }}"
+
+
+new
+
+- name: Retrieve IKP and Vault Credentials
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Set Credentials from Environment Variables
+      set_fact:
+        IKP_USER: "{{ lookup('ansible.builtin.env', 'IKP_USER_username') }}"
+        IKP_PASSWORD: "{{ lookup('ansible.builtin.env', 'IKP_USER_password') }}"
+        HASHI_TOKEN: "{{ lookup('ansible.builtin.env', 'ANSIBLE_VAULT_PASSWORD_hashi_token') }}"
+        VAULT_TOKEN: "{{ lookup('ansible.builtin.env', 'ANSIBLE_VAULT_PASSWORD_Vault_Token') }}"
+
+    - name: Debug All Credentials
+      debug:
+        msg:
+          - "IKP_USER: {{ IKP_USER | default('Not Set') }}"
+          - "IKP_PASSWORD: {{ IKP_PASSWORD | default('Not Set') }}"
+          - "HASHI_TOKEN: {{ HASHI_TOKEN | default('Not Set') }}"
+          - "VAULT_TOKEN: {{ VAULT_TOKEN | default('Not Set') }}"
+
+ikp_username: "{{ tower_credential_username }}"
+ikp_password: "{{ tower_credential_password }}"
