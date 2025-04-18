@@ -1,0 +1,1272 @@
+We have mutlple customer which has number starting 100 so next customer is 101 so on . We have almost 150 customers and each customer have multiple users . In each user table we have id , first name , last name , mail .  In database we have created each customer as  schema and have users table inside it having id, first name ,last name and mail id .  Now we need to call API provind id's of users in request  . Then check in database if it matches then log match if not the update the database . We need python solution on it
+
+
+Thanks, this is clear. Here's a Python-based solution that can:
+
+1. Call an API to get user data (based on IDs).
+
+
+2. Check each user's details against corresponding users tables inside individual customer schemas.
+
+
+3. Log if a match is found.
+
+
+4. Update the user data in DB if not matched.
+
+
+
+Assumptions:
+
+You're using PostgreSQL (since schemas are mentioned).
+
+API returns JSON: list of users like { "id": ..., "first_name": ..., "last_name": ..., "mail": ... }
+
+Python script will be executed manually or as a scheduled job.
+
+
+
+---
+
+Required Libraries:
+
+pip install psycopg2 requests
+
+
+---
+
+Python Script:
+
+import psycopg2
+import requests
+import logging
+
+# Configure logging
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(message)s')
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+# Example function to get users from API
+def get_users_from_api():
+    response = requests.get('https://api.example.com/users')
+    response.raise_for_status()
+    return response.json()  # Expected format: list of user dicts
+
+# Check and update users
+def sync_users():
+    users = get_users_from_api()
+
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    for user in users:
+        user_id = user['id']
+        customer_id = str(user_id)[:3]  # Assuming ID starts with customer number like 101, 102, etc.
+        schema_name = f"customer_{customer_id}"
+
+        try:
+            cursor.execute(f"""
+                SELECT id, first_name, last_name, mail
+                FROM {schema_name}.users
+                WHERE id = %s
+            """, (user_id,))
+            db_user = cursor.fetchone()
+
+            if db_user:
+                # Compare values
+                if (db_user[1], db_user[2], db_user[3]) == (user['first_name'], user['last_name'], user['mail']):
+                    logging.info(f"[MATCH] User ID {user_id} matched in {schema_name}.users")
+                else:
+                    cursor.execute(f"""
+                        UPDATE {schema_name}.users
+                        SET first_name = %s, last_name = %s, mail = %s
+                        WHERE id = %s
+                    """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                    conn.commit()
+                    logging.info(f"[UPDATED] User ID {user_id} updated in {schema_name}.users")
+            else:
+                logging.warning(f"[MISSING] User ID {user_id} not found in {schema_name}.users")
+
+        except Exception as e:
+            logging.error(f"[ERROR] Failed to process user {user_id}: {e}")
+
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    sync_users()
+
+
+---
+
+Notes:
+
+Adjust schema name pattern if it's not customer_<ID>.
+
+Add authentication headers for the API if needed.
+
+You can parameterize DB config and API URL via environment variables or config files.
+
+
+Would you like to extend this to support logging into a centralized DB or push a summary report to a Slack/Teams webhook too?
+
+
+
+Sorry customer schema name  are like company.101
+
+
+Got it — so each schema is named like company.101, company.102, etc., and the users table resides inside each of these schemas. PostgreSQL doesn’t allow dots (.) in schema names unless quoted properly, and most likely, these are actually named like "company.101" (i.e., the dot is part of the schema name).
+
+So we'll need to quote the schema name properly in the SQL query to make this work.
+
+
+---
+
+Updated Python Script:
+
+import psycopg2
+import requests
+import logging
+
+# Configure logging
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(message)s')
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+# Example function to get users from API
+def get_users_from_api():
+    response = requests.get('https://api.example.com/users')
+    response.raise_for_status()
+    return response.json()  # Expected format: list of user dicts
+
+# Check and update users
+def sync_users():
+    users = get_users_from_api()
+
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    for user in users:
+        user_id = user['id']
+        customer_id = str(user_id)[:3]  # Assuming ID starts with customer number like 101, 102, etc.
+        schema_name = f'"company.{customer_id}"'  # Properly quoted for PostgreSQL
+
+        try:
+            cursor.execute(f"""
+                SELECT id, first_name, last_name, mail
+                FROM {schema_name}.users
+                WHERE id = %s
+            """, (user_id,))
+            db_user = cursor.fetchone()
+
+            if db_user:
+                if (db_user[1], db_user[2], db_user[3]) == (user['first_name'], user['last_name'], user['mail']):
+                    logging.info(f"[MATCH] User ID {user_id} matched in {schema_name}.users")
+                else:
+                    cursor.execute(f"""
+                        UPDATE {schema_name}.users
+                        SET first_name = %s, last_name = %s, mail = %s
+                        WHERE id = %s
+                    """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                    conn.commit()
+                    logging.info(f"[UPDATED] User ID {user_id} updated in {schema_name}.users")
+            else:
+                logging.warning(f"[MISSING] User ID {user_id} not found in {schema_name}.users")
+
+        except Exception as e:
+            logging.error(f"[ERROR] Failed to process user {user_id} in {schema_name}: {e}")
+
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    sync_users()
+
+
+---
+
+Summary of Key Fixes:
+
+Schema names like company.101 must be wrapped in double quotes to be valid PostgreSQL identifiers.
+
+Now using schema_name = f'"company.{customer_id}"'.
+
+
+Let me know if:
+
+The user ID doesn't always begin with the customer number (we can then change logic).
+
+You want to parallelize it or handle it in batches.
+
+You want to insert the user if not found instead of logging [MISSING].
+
+
+Want me to add an option to log all changes to a DB table instead of a log file?
+
+
+
+
+Sorry we need to check customer id from table  public.company  where cust_name=ghqwee123 this will give customer id like 121 then schema is company.121
+
+
+
+Perfect — thanks for the clarification.
+
+So the flow now is:
+
+1. You get a cust_name like ghqwee123.
+
+
+2. You look up the corresponding customer_id from public.company using:
+
+SELECT customer_id FROM public.company WHERE cust_name = 'ghqwee123';
+
+
+3. Then use the schema company.<customer_id> (e.g., company.121) to access the users table.
+
+
+
+
+---
+
+Updated Python Script (with cust_name lookup):
+
+Here’s the revised version:
+
+import psycopg2
+import requests
+import logging
+
+# Configure logging
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(message)s')
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+# API to fetch users for a customer
+def get_users_from_api():
+    response = requests.get('https://api.example.com/users')
+    response.raise_for_status()
+    return response.json()
+
+# Get customer ID from company table
+def get_customer_id(cust_name, cursor):
+    cursor.execute("SELECT customer_id FROM public.company WHERE cust_name = %s", (cust_name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+# Sync user records
+def sync_users(cust_name):
+    users = get_users_from_api()
+
+    conn = psycopg2.connect(**db_config)
+    cursor =
+
+
+
+First we need to get the customer details from Jason file like hqwe123 asd123 then based on customer id query public.company get the id  like select id where customer name =hqwe123 then go to schema like company.id then query user id get the userid,first name,last name ,email . Then match it with details we get from API and if it match then log if there is mismatch then update the column in database  for particular user for that customer . Please not userid is unique here we will use that to update three columns
+
+
+
+Thanks — now it's crystal clear. Here's the full flow for the Python script:
+
+Flow Summary:
+
+1. Read customer names from a local JSON file (e.g., customers.json with entries like ["hqwe123", "asd123"]).
+
+
+2. For each customer:
+
+Query public.company to get the customer_id.
+
+Compose schema name as company.<id>.
+
+
+
+3. Fetch all user records from an API.
+
+
+4. For each user:
+
+Query the corresponding schema's users table using user_id.
+
+If record matches — log match.
+
+If any column (first name, last name, mail) is different — update those fields and log the update.
+
+
+
+
+
+---
+
+Python Script (final working version):
+
+import psycopg2
+import requests
+import logging
+import json
+
+# Configure logging
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(message)s')
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+# Load customers from local JSON file
+def load_customers_from_file(filepath):
+    with open(filepath, 'r') as file:
+        return json.load(file)  # Expects a list of cust_name strings
+
+# Get customer ID from company table
+def get_customer_id(cust_name, cursor):
+    cursor.execute("SELECT customer_id FROM public.company WHERE cust_name = %s", (cust_name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+# Fetch users from external API
+def get_users_from_api():
+    response = requests.get("https://api.example.com/users")
+    response.raise_for_status()
+    return response.json()  # List of user dicts
+
+# Sync users for each customer
+def sync_users_for_customers(customers):
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+    users_from_api = get_users_from_api()
+
+    for cust_name in customers:
+        customer_id = get_customer_id(cust_name, cursor)
+        if not customer_id:
+            logging.warning(f"[SKIP] Customer {cust_name} not found in public.company")
+            continue
+
+        schema_name = f'"company.{customer_id}"'
+
+        for user in users_from_api:
+            user_id = user['id']
+            try:
+                cursor.execute(f"""
+                    SELECT id, first_name, last_name, mail
+                    FROM {schema_name}.users
+                    WHERE id = %s
+                """, (user_id,))
+                db_user = cursor.fetchone()
+
+                if db_user:
+                    db_first, db_last, db_mail = db_user[1], db_user[2], db_user[3]
+                    if (db_first, db_last, db_mail) == (user['first_name'], user['last_name'], user['mail']):
+                        logging.info(f"[MATCH] User ID {user_id} matched in {schema_name}.users")
+                    else:
+                        cursor.execute(f"""
+                            UPDATE {schema_name}.users
+                            SET first_name = %s, last_name = %s, mail = %s
+                            WHERE id = %s
+                        """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                        conn.commit()
+                        logging.info(f"[UPDATED] User ID {user_id} updated in {schema_name}.users")
+                else:
+                    logging.warning(f"[MISSING] User ID {user_id} not found in {schema_name}.users")
+
+            except Exception as e:
+                logging.error(f"[ERROR] Error syncing user {user_id} for {schema_name}: {e}")
+
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    customer_list = load_customers_from_file("customers.json")
+    sync_users_for_customers(customer_list)
+
+
+---
+
+customers.json Example:
+
+["hqwe123", "asd123"]
+
+
+---
+
+What You Need to Set Up:
+
+Replace https://api.example.com/users with your actual API URL.
+
+Ensure your JSON file path is correct.
+
+Confirm schema names like "company.121" (quoted!) are valid in PostgreSQL.
+
+
+
+---
+
+Would you like me to add:
+
+Support for inserting users if they're missing?
+
+Batching for large user lists?
+
+Config file/env-based DB/API values?
+
+
+In API call we need to send all  user_id in request and we can send 200 user_if at a time
+
+
+Got it — the API expects a POST request with up to 200 user_ids at a time in the payload. The response will be user data for those IDs.
+
+Here’s the updated plan:
+
+
+---
+
+Workflow Updates:
+
+1. Read customer names from customers.json.
+
+
+2. For each customer:
+
+Get customer_id from public.company.
+
+Fetch all user_ids from that customer's schema.
+
+
+
+3. Batch user_ids into groups of 200.
+
+
+4. For each batch:
+
+Send a POST request to the API with those 200 IDs.
+
+API returns user data for those IDs.
+
+Compare and update mismatches in DB.
+
+
+
+
+
+---
+
+Updated Python Script:
+
+import psycopg2
+import requests
+import logging
+import json
+from itertools import islice
+
+# Configure logging
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(message)s')
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+API_URL = "https://api.example.com/users/batch"  # Use your actual API URL
+BATCH_SIZE = 200
+
+# Load customers from JSON file
+def load_customers(filepath):
+    with open(filepath, 'r') as f:
+        return json.load(f)
+
+# Get customer_id from cust_name
+def get_customer_id(cursor, cust_name):
+    cursor.execute("SELECT customer_id FROM public.company WHERE cust_name = %s", (cust_name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+# Get all user IDs from a schema
+def get_user_ids(cursor, schema_name):
+    cursor.execute(f"SELECT id FROM {schema_name}.users")
+    return [row[0] for row in cursor.fetchall()]
+
+# Split list into batches of n
+def batch(iterable, size):
+    iterator = iter(iterable)
+    while True:
+        chunk = list(islice(iterator, size))
+        if not chunk:
+            break
+        yield chunk
+
+# Call API with list of user_ids (max 200 at a time)
+def fetch_users_from_api(user_ids_batch):
+    response = requests.post(API_URL, json={'user_ids': user_ids_batch})
+    response.raise_for_status()
+    return response.json()  # Should return list of user dicts
+
+# Sync logic
+def sync_users_for_customers(customers):
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    for cust_name in customers:
+        customer_id = get_customer_id(cursor, cust_name)
+        if not customer_id:
+            logging.warning(f"[SKIP] Customer {cust_name} not found.")
+            continue
+
+        schema_name = f'"company.{customer_id}"'
+        user_ids = get_user_ids(cursor, schema_name)
+
+        for user_ids_batch in batch(user_ids, BATCH_SIZE):
+            try:
+                users_from_api = fetch_users_from_api(user_ids_batch)
+            except Exception as e:
+                logging.error(f"[API ERROR] Failed for customer {cust_name} batch: {e}")
+                continue
+
+            for user in users_from_api:
+                user_id = user['id']
+                try:
+                    cursor.execute(f"""
+                        SELECT id, first_name, last_name, mail
+                        FROM {schema_name}.users
+                        WHERE id = %s
+                    """, (user_id,))
+                    db_user = cursor.fetchone()
+
+                    if db_user:
+                        if (db_user[1], db_user[2], db_user[3]) == (user['first_name'], user['last_name'], user['mail']):
+                            logging.info(f"[MATCH] {user_id} in {schema_name}")
+                        else:
+                            cursor.execute(f"""
+                                UPDATE {schema_name}.users
+                                SET first_name = %s, last_name = %s, mail = %s
+                                WHERE id = %s
+                            """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                            conn.commit()
+                            logging.info(f"[UPDATED] {user_id} in {schema_name}")
+                    else:
+                        logging.warning(f"[MISSING] {user_id} not found in {schema_name}")
+                except Exception as e:
+                    logging.error(f"[DB ERROR] User {user_id} in {schema_name}: {e}")
+
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    customers = load_customers("customers.json")
+    sync_users_for_customers(customers)
+
+
+---
+
+Notes:
+
+Make sure your API endpoint supports POST with {"user_ids": [123, 124, ...]}.
+
+Ensure the JSON response from the API returns list of user dicts with fields: id, first_name, last_name, mail.
+
+
+Would you like logging to go to both file and console? Want to skip updates if certain fields are null?
+
+
+
+In API call we need to send all  user_id in request and we can send 200 user_if at a time
+
+
+Got it — the API expects a POST request with up to 200 user_ids at a time in the payload. The response will be user data for those IDs.
+
+Here’s the updated plan:
+
+
+---
+
+Workflow Updates:
+
+1. Read customer names from customers.json.
+
+
+2. For each customer:
+
+Get customer_id from public.company.
+
+Fetch all user_ids from that customer's schema.
+
+
+
+3. Batch user_ids into groups of 200.
+
+
+4. For each batch:
+
+Send a POST request to the API with those 200 IDs.
+
+API returns user data for those IDs.
+
+Compare and update mismatches in DB.
+
+
+
+
+
+---
+
+Updated Python Script:
+
+import psycopg2
+import requests
+import logging
+import json
+from itertools import islice
+
+# Configure logging
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(message)s')
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+API_URL = "https://api.example.com/users/batch"  # Use your actual API URL
+BATCH_SIZE = 200
+
+# Load customers from JSON file
+def load_customers(filepath):
+    with open(filepath, 'r') as f:
+        return json.load(f)
+
+# Get customer_id from cust_name
+def get_customer_id(cursor, cust_name):
+    cursor.execute("SELECT customer_id FROM public.company WHERE cust_name = %s", (cust_name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+# Get all user IDs from a schema
+def get_user_ids(cursor, schema_name):
+    cursor.execute(f"SELECT id FROM {schema_name}.users")
+    return [row[0] for row in cursor.fetchall()]
+
+# Split list into batches of n
+def batch(iterable, size):
+    iterator = iter(iterable)
+    while True:
+        chunk = list(islice(iterator, size))
+        if not chunk:
+            break
+        yield chunk
+
+# Call API with list of user_ids (max 200 at a time)
+def fetch_users_from_api(user_ids_batch):
+    response = requests.post(API_URL, json={'user_ids': user_ids_batch})
+    response.raise_for_status()
+    return response.json()  # Should return list of user dicts
+
+# Sync logic
+def sync_users_for_customers(customers):
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    for cust_name in customers:
+        customer_id = get_customer_id(cursor, cust_name)
+        if not customer_id:
+            logging.warning(f"[SKIP] Customer {cust_name} not found.")
+            continue
+
+        schema_name = f'"company.{customer_id}"'
+        user_ids = get_user_ids(cursor, schema_name)
+
+        for user_ids_batch in batch(user_ids, BATCH_SIZE):
+            try:
+                users_from_api = fetch_users_from_api(user_ids_batch)
+            except Exception as e:
+                logging.error(f"[API ERROR] Failed for customer {cust_name} batch: {e}")
+                continue
+
+            for user in users_from_api:
+                user_id = user['id']
+                try:
+                    cursor.execute(f"""
+                        SELECT id, first_name, last_name, mail
+                        FROM {schema_name}.users
+                        WHERE id = %s
+                    """, (user_id,))
+                    db_user = cursor.fetchone()
+
+                    if db_user:
+                        if (db_user[1], db_user[2], db_user[3]) == (user['first_name'], user['last_name'], user['mail']):
+                            logging.info(f"[MATCH] {user_id} in {schema_name}")
+                        else:
+                            cursor.execute(f"""
+                                UPDATE {schema_name}.users
+                                SET first_name = %s, last_name = %s, mail = %s
+                                WHERE id = %s
+                            """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                            conn.commit()
+                            logging.info(f"[UPDATED] {user_id} in {schema_name}")
+                    else:
+                        logging.warning(f"[MISSING] {user_id} not found in {schema_name}")
+                except Exception as e:
+                    logging.error(f"[DB ERROR] User {user_id} in {schema_name}: {e}")
+
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    customers = load_customers("customers.json")
+    sync_users_for_customers(customers)
+
+
+---
+
+Notes:
+
+Make sure your API endpoint supports POST with {"user_ids": [123, 124, ...]}.
+
+Ensure the JSON response from the API returns list of user dicts with fields: id, first_name, last_name, mail.
+
+
+Would you like logging to go to both file and console? Want to skip updates if certain fields are null?
+
+Need authentication B2B in API call
+
+Got it — you need B2B authentication for the API call. There are a few common ways APIs implement B2B authentication:
+
+1. Client ID / Client Secret (OAuth2 Client Credentials flow)
+
+
+2. Static Bearer Token
+
+
+3. mTLS (Mutual TLS — less common for public-facing APIs)
+
+
+4. API Key in header
+
+
+
+Could you confirm which type of B2B auth your API requires? Here's how each is handled in the Python script:
+
+
+---
+
+1. Bearer Token (Static or OAuth2 token)
+
+headers = {
+    'Authorization': 'Bearer YOUR_ACCESS_TOKEN'
+}
+response = requests.post(API_URL, json={'user_ids': user_ids_batch}, headers=headers)
+
+
+---
+
+2. API Key in Header
+
+headers = {
+    'x-api-key': 'YOUR_API_KEY'
+}
+response = requests.post(API_URL, json={'user_ids': user_ids_batch}, headers=headers)
+
+
+---
+
+3. OAuth2 Client Credentials (Dynamic Token)
+
+You get a token first:
+
+auth_response = requests.post('https://auth.example.com/oauth2/token', data={
+    'grant_type': 'client_credentials',
+    'client_id': 'YOUR_CLIENT_ID',
+    'client_secret': 'YOUR_CLIENT_SECRET'
+})
+access_token = auth_response.json()['access_token']
+
+Then pass it:
+
+headers = {
+    'Authorization': f'Bearer {access_token}'
+}
+response = requests.post(API_URL, json={'user_ids': user_ids_batch}, headers=headers)
+
+
+---
+
+Let me know which one your API is using and I’ll plug it directly into your existing script. If you're not sure, a sample curl or Postman config would help.
+
+
+
+†*******------********
+
+Using dynamic token give me full code
+
+
+Thanks! Since you're using OAuth2 with Client Credentials (dynamic token) for B2B authentication, here’s the complete working Python script, integrated with:
+
+Customer JSON file input
+
+Dynamic OAuth2 token generation
+
+Batching API calls with 200 user IDs
+
+DB checks and updates
+
+
+
+---
+
+Full Python Script: OAuth2 + DB Sync
+
+import psycopg2
+import requests
+import logging
+import json
+from itertools import islice
+
+# ========== CONFIG ==========
+
+# OAuth2 token details
+AUTH_URL = "https://auth.example.com/oauth2/token"
+CLIENT_ID = "your-client-id"
+CLIENT_SECRET = "your-client-secret"
+
+# API URL
+API_URL = "https://api.example.com/users/batch"
+BATCH_SIZE = 200
+
+# DB connection settings
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+# Log config
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+
+# ========== FUNCTIONS ==========
+
+def load_customers(filepath):
+    with open(filepath, 'r') as f:
+        return json.load(f)
+
+def get_oauth2_token():
+    response = requests.post(AUTH_URL, data={
+        'grant_type': 'client_credentials',
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET
+    })
+    response.raise_for_status()
+    return response.json()['access_token']
+
+def get_customer_id(cursor, cust_name):
+    cursor.execute("SELECT customer_id FROM public.company WHERE cust_name = %s", (cust_name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+def get_user_ids(cursor, schema_name):
+    cursor.execute(f"SELECT id FROM {schema_name}.users")
+    return [row[0] for row in cursor.fetchall()]
+
+def batch(iterable, size):
+    iterator = iter(iterable)
+    while True:
+        chunk = list(islice(iterator, size))
+        if not chunk:
+            break
+        yield chunk
+
+def fetch_users_from_api(user_ids_batch, token):
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+    response = requests.post(API_URL, json={'user_ids': user_ids_batch}, headers=headers)
+    response.raise_for_status()
+    return response.json()
+
+def sync_users_for_customers(customers):
+    token = get_oauth2_token()
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    for cust_name in customers:
+        try:
+            customer_id = get_customer_id(cursor, cust_name)
+            if not customer_id:
+                logging.warning(f"[SKIP] Customer {cust_name} not found.")
+                continue
+
+            schema_name = f'"company.{customer_id}"'
+            user_ids = get_user_ids(cursor, schema_name)
+
+            for user_ids_batch in batch(user_ids, BATCH_SIZE):
+                try:
+                    users_from_api = fetch_users_from_api(user_ids_batch, token)
+                except Exception as e:
+                    logging.error(f"[API ERROR] {cust_name} batch failed: {e}")
+                    continue
+
+                for user in users_from_api:
+                    user_id = user['id']
+                    try:
+                        cursor.execute(f"""
+                            SELECT id, first_name, last_name, mail
+                            FROM {schema_name}.users
+                            WHERE id = %s
+                        """, (user_id,))
+                        db_user = cursor.fetchone()
+
+                        if db_user:
+                            if (db_user[1], db_user[2], db_user[3]) == (user['first_name'], user['last_name'], user['mail']):
+                                logging.info(f"[MATCH] User {user_id} in {schema_name}")
+                            else:
+                                cursor.execute(f"""
+                                    UPDATE {schema_name}.users
+                                    SET first_name = %s, last_name = %s, mail = %s
+                                    WHERE id = %s
+                                """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                                conn.commit()
+                                logging.info(f"[UPDATED] User {user_id} in {schema_name}")
+                        else:
+                            logging.warning(f"[NOT FOUND] User {user_id} not found in {schema_name}")
+                    except Exception as e:
+                        logging.error(f"[DB ERROR] User {user_id} in {schema_name}: {e}")
+        except Exception as e:
+            logging.error(f"[CUSTOMER ERROR] {cust_name}: {e}")
+
+    cursor.close()
+    conn.close()
+
+# ========== MAIN ==========
+
+if __name__ == "__main__":
+    customer_list = load_customers("customers.json")
+    sync_users_for_customers(customer_list)
+
+
+---
+
+Example customers.json:
+
+["hqwe123", "asd123"]
+
+
+---
+
+Things to Update:
+
+Replace AUTH_URL, CLIENT_ID, CLIENT_SECRET, and API_URL with your actual values.
+
+Adjust database config and schema/table names if needed.
+
+
+
+---
+
+Want to log to both console and file? Or auto-refresh the token if it expires mid-run?
+
+
+
+Auto-refreah , secondly we need to call that API every day 12 am
+
+
+Perfect — here's how we can handle both requirements:
+
+
+---
+
+1. Auto-Refresh OAuth2 Token
+
+If the token expires mid-process, we'll detect a 401 Unauthorized response and automatically request a new token, then retry the API call once for that batch.
+
+2. Daily Execution at 12 AM
+
+Use a cron job (Linux) or Task Scheduler (Windows) to run the script every day at midnight.
+
+
+---
+
+Updated Code with Token Auto-Refresh
+
+import psycopg2
+import requests
+import logging
+import json
+from itertools import islice
+import time
+
+# ========== CONFIG ==========
+
+AUTH_URL = "https://auth.example.com/oauth2/token"
+CLIENT_ID = "your-client-id"
+CLIENT_SECRET = "your-client-secret"
+
+API_URL = "https://api.example.com/users/batch"
+BATCH_SIZE = 200
+
+db_config = {
+    'host': 'your-db-host',
+    'port': '5432',
+    'dbname': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+logging.basicConfig(
+    filename='user_sync.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s'
+)
+
+# ========== TOKEN MANAGEMENT ==========
+
+def get_oauth2_token():
+    response = requests.post(AUTH_URL, data={
+        'grant_type': 'client_credentials',
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET
+    })
+    response.raise_for_status()
+    return response.json()['access_token']
+
+# ========== UTILS ==========
+
+def load_customers(filepath):
+    with open(filepath, 'r') as f:
+        return json.load(f)
+
+def get_customer_id(cursor, cust_name):
+    cursor.execute("SELECT customer_id FROM public.company WHERE cust_name = %s", (cust_name,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+def get_user_ids(cursor, schema_name):
+    cursor.execute(f"SELECT id FROM {schema_name}.users")
+    return [row[0] for row in cursor.fetchall()]
+
+def batch(iterable, size):
+    iterator = iter(iterable)
+    while True:
+        chunk = list(islice(iterator, size))
+        if not chunk:
+            break
+        yield chunk
+
+def fetch_users_from_api(user_ids_batch, token):
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+    response = requests.post(API_URL, json={'user_ids': user_ids_batch}, headers=headers)
+    
+    if response.status_code == 401:
+        raise Exception("TokenExpired")
+    
+    response.raise_for_status()
+    return response.json()
+
+# ========== CORE LOGIC ==========
+
+def sync_users_for_customers(customers):
+    token = get_oauth2_token()
+    conn = psycopg2.connect(**db_config)
+    cursor = conn.cursor()
+
+    for cust_name in customers:
+        try:
+            customer_id = get_customer_id(cursor, cust_name)
+            if not customer_id:
+                logging.warning(f"[SKIP] Customer {cust_name} not found.")
+                continue
+
+            schema_name = f'"company.{customer_id}"'
+            user_ids = get_user_ids(cursor, schema_name)
+
+            for user_ids_batch in batch(user_ids, BATCH_SIZE):
+                try:
+                    try:
+                        users_from_api = fetch_users_from_api(user_ids_batch, token)
+                    except Exception as e:
+                        if str(e) == "TokenExpired":
+                            logging.warning("[TOKEN] Expired. Refreshing token.")
+                            token = get_oauth2_token()
+                            users_from_api = fetch_users_from_api(user_ids_batch, token)
+                        else:
+                            raise
+
+                    for user in users_from_api:
+                        user_id = user['id']
+                        cursor.execute(f"""
+                            SELECT id, first_name, last_name, mail
+                            FROM {schema_name}.users
+                            WHERE id = %s
+                        """, (user_id,))
+                        db_user = cursor.fetchone()
+
+                        if db_user:
+                            if (db_user[1], db_user[2], db_user[3]) == (user['first_name'], user['last_name'], user['mail']):
+                                logging.info(f"[MATCH] User {user_id} in {schema_name}")
+                            else:
+                                cursor.execute(f"""
+                                    UPDATE {schema_name}.users
+                                    SET first_name = %s, last_name = %s, mail = %s
+                                    WHERE id = %s
+                                """, (user['first_name'], user['last_name'], user['mail'], user_id))
+                                conn.commit()
+                                logging.info(f"[UPDATED] User {user_id} in {schema_name}")
+                        else:
+                            logging.warning(f"[NOT FOUND] User {user_id} not found in {schema_name}")
+
+                except Exception as e:
+                    logging.error(f"[BATCH ERROR] {cust_name} batch failed: {e}")
+        except Exception as e:
+            logging.error(f"[CUSTOMER ERROR] {cust_name}: {e}")
+
+    cursor.close()
+    conn.close()
+
+# ========== MAIN ==========
+
+if __name__ == "__main__":
+    customer_list = load_customers("customers.json")
+    sync_users_for_customers(customer_list)
+
+
+---
+
+Schedule Script at 12 AM Daily
+
+Linux/Unix (Cron)
+
+1. Open cron:
+
+
+
+crontab -e
+
+2. Add this line:
+
+
+
+0 0 * * * /usr/bin/python3 /path/to/your/script.py
+
+> Adjust /usr/bin/python3 and path as needed.
+
+
+
+
+---
+
+Windows Task Scheduler
+
+Create a basic task
+
+Trigger: Daily at 12:00 AM
+
+Action: Run
+
+Program/script: python
+
+Arguments: C:\path\to\script.py
+
+
+
+
+---
+
+Would you like an email or Slack alert on failure/success each day?
+
+
+We have scheduler in Unix we can use that
+
+
+Can we use python to run it
+
+
+
+Yes — you can absolutely schedule and run it entirely with Python, using a library like schedule or APScheduler if you prefer to avoid cron.
+
+Here’s how to do it using schedule (simpler and reliable for daily tasks):
+
+
+---
+
+Option: Run Daily at 12 AM Using Python (schedule library)
+
+1. Install the schedule module (if not already):
+
+pip install schedule
+
+2. Wrap your existing sync logic like this:
+
+import schedule
+import time
+from your_script import sync_users_for_customers, load_customers  # Import your existing logic
+
+def job():
+    customer_list = load_customers("customers.json")
+    sync_users_for_customers(customer_list)
+
+# Schedule the job at midnight
+schedule.every().day.at("00:00").do(job)
+
+if __name__ == "__main__":
+    print("Scheduler started. Waiting for 12:00 AM daily task...")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
+Save this as user_sync_scheduler.py
+
+
+---
+
+Then just run once in background:
+
+nohup python3 user_sync_scheduler.py &
+
+It will run forever, checking every minute if it's midnight.
+
+Use ps -ef | grep user_sync_scheduler to confirm it’s running.
+
+Logs will go to nohup.out unless redirected.
+
+
+
+---
+
+Would you like to daemonize it with systemd too (so it starts on reboot)?
+
+
