@@ -1,0 +1,22 @@
+- name: Load environment-specific variables
+  hosts: all
+  gather_facts: no
+  vars:
+    env_input: "{{ env | default('sit') | lower }}"  # default to 'sit' if not provided
+
+  tasks:
+    - name: Determine variable file based on environment
+      set_fact:
+        env_file: >-
+          {{
+            'vars/uat_env.yml' if env_input == 'uat' else
+            'vars/prod_env.yml' if env_input == 'prod' else
+            'vars/dev_env.yml'
+          }}
+
+    - name: Load environment variables
+      include_vars: "{{ env_file }}"
+
+    - name: Debug loaded variables
+      debug:
+        msg: "Environment: {{ env_input }} | Loaded from: {{ env_file }} | URL: {{ app_url }}"
