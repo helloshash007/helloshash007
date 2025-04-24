@@ -1,0 +1,115 @@
+Perfect. Here's the revised engineering story that reflects the full picture—how developers use Git, how Jenkins automates packaging and upload, and how Jenkins triggers Ansible with the necessary variables.
+
+
+---
+
+Title: Engineering a Scalable Oracle SQL Deployment Pipeline Using Git, Jenkins, Nexus, and Ansible
+
+As our development and release cycles accelerated, it became clear that deploying Oracle SQL scripts manually was error-prone and not scalable. We needed a standardized, auditable, and automated deployment process—one that developers could trust and Ops could manage with minimal touch.
+
+Here’s how I engineered the solution.
+
+
+---
+
+Phase 1: Developer Workflow – Git as the Source of Truth
+
+We asked developers to maintain their SQL scripts in Git. The structure was simple:
+
+A master.sql file that defines the order of execution
+
+All SQL files referenced in the master file (e.g., test.sql, test1.sql)
+
+
+This allowed developers to focus purely on SQL logic and sequencing—no need to worry about deployment mechanics.
+
+Example master.sql:
+
+test.sql  
+test1.sql
+
+
+---
+
+Phase 2: Jenkins – Automating Packaging and Upload
+
+Once the developer pushed changes to Git, Jenkins took over. I created a Jenkins pipeline that:
+
+1. Clones the repo containing the master.sql and SQL scripts
+
+
+2. Validates that all files listed in master.sql actually exist
+
+
+3. Packages the master.sql and all referenced SQL files into a .tar.gz archive
+
+
+4. Uploads the package to Nexus, our artifact repository
+
+
+5. Captures the version assigned to the artifact and logs it for use in deployment
+
+
+
+This gave us artifact traceability, and ensured that only what’s defined in the master file is ever packaged and deployed.
+
+
+---
+
+Phase 3: Jenkins – Triggering Ansible for Deployment
+
+After uploading to Nexus, the same Jenkins pipeline triggers the Ansible deployment. Jenkins passes a set of extra variables to Ansible Tower, including:
+
+Version – the SQL artifact version from Nexus
+
+Nexus credentials (nexus_user, nexus_pass)
+
+Oracle DB credentials and connection info
+
+Output log file path (sqlplus_output_log)
+
+
+Ansible playbook then:
+
+1. Downloads the correct artifact from Nexus
+
+
+2. Extracts it on the Oracle server
+
+
+3. Reads master.sql line-by-line
+
+
+4. Executes each SQL file using SQL*Plus in the defined order
+
+
+5. Logs output and identifies success or failure for each file
+
+
+
+This pipeline ensures everything is zero-touch after commit. Developers write SQL, commit to Git, and Jenkins handles the rest—from package creation to deployment via Ansible.
+
+
+---
+
+Benefits Achieved
+
+Zero manual SQL execution by Ops
+
+Sequenced, consistent deployments across environments
+
+Audit logs and traceability for every deployment
+
+Quick rollback ability using versioned artifacts in Nexus
+
+
+
+---
+
+This system has become the backbone of our SQL deployment strategy—reliable, scalable, and fully automated. And the best part? It’s completely developer-driven and Ops-friendly.
+
+
+---
+
+Want this turned into a Confluence-ready doc or visualized as a flowchart?
+
