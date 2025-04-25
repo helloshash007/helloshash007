@@ -1,0 +1,16 @@
+Absolutely — here’s a simpler, more human-friendly version:
+
+
+---
+
+Why we use Nexus instead of Git for deployment:
+Git is great for writing and storing code, but things in Git can change anytime.
+We use Nexus to store a fixed package of the SQL files — kind of like a snapshot.
+That way, we know exactly what we’re deploying, and it won’t change between environments.
+It also helps us track versions and makes rollbacks easier if something goes wrong.
+
+
+---
+
+Let me know if you want it even shorter for a diagram caption.
+
