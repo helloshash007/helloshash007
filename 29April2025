@@ -60,3 +60,21 @@ COPY (
     CROSS JOIN LATERAL
         (EXECUTE sub.sql_stmt) AS t(uid)
 ) TO '/path/to/output.csv' WITH CSV HEADER;
+
+
+DO $$
+DECLARE
+    sqls TEXT;
+BEGIN
+    SELECT string_agg(
+        'SELECT ''' || table_schema || '.' || table_name || ''' AS source_table, uid FROM "' || table_schema || '"."' || table_name || '"',
+        ' UNION ALL '
+    ) INTO sqls
+    FROM information_schema.columns
+    WHERE column_name = 'uid'
+      AND table_name = 'user'
+      AND table_schema NOT IN ('information_schema', 'pg_catalog');
+
+    EXECUTE format('COPY (%s) TO ''/tmp/uid_output.csv'' WITH CSV HEADER', sqls);
+END
+$$;
