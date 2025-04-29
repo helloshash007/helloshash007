@@ -43,3 +43,20 @@ GROUP BY
     table_schema, table_name
 ORDER BY 
     table_schema, table_name;
+
+
+
+
+COPY (
+    SELECT table_schema || '.' || table_name AS table_full_name, uid
+    FROM (
+        SELECT table_schema, table_name, 
+               format('SELECT uid FROM %I.%I', table_schema, table_name) AS sql_stmt
+        FROM information_schema.columns
+        WHERE column_name = 'uid'
+          AND table_name = 'user'
+          AND table_schema NOT IN ('information_schema', 'pg_catalog')
+    ) sub
+    CROSS JOIN LATERAL
+        (EXECUTE sub.sql_stmt) AS t(uid)
+) TO '/path/to/output.csv' WITH CSV HEADER;
