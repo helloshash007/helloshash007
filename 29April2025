@@ -1,0 +1,20 @@
+DO $$
+DECLARE
+    r RECORD;
+    result RECORD;
+BEGIN
+    FOR r IN
+        SELECT table_schema, table_name
+        FROM information_schema.columns
+        WHERE column_name = 'uid'
+          AND table_name = 'user'
+          AND table_schema NOT IN ('information_schema', 'pg_catalog')
+    LOOP
+        RAISE NOTICE 'Fetching from %.%', r.table_schema, r.table_name;
+        FOR result IN EXECUTE format('SELECT uid FROM %I.%I', r.table_schema, r.table_name)
+        LOOP
+            RAISE NOTICE 'uid: %', result.uid;
+        END LOOP;
+    END LOOP;
+END
+$$;
