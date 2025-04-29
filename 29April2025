@@ -18,3 +18,28 @@ BEGIN
     END LOOP;
 END
 $$;
+
+
+
+
+SELECT 
+    table_schema, 
+    table_name,
+    CASE 
+        WHEN COUNT(*) = COUNT(DISTINCT uid) THEN 'Unique'
+        ELSE 'Not Unique'
+    END AS uid_uniqueness
+FROM 
+    information_schema.columns c
+JOIN 
+    information_schema.tables t 
+    ON c.table_schema = t.table_schema 
+    AND c.table_name = t.table_name
+WHERE 
+    c.column_name = 'uid'
+    AND t.table_type = 'BASE TABLE'
+    AND c.table_schema NOT IN ('information_schema', 'pg_catalog')
+GROUP BY 
+    table_schema, table_name
+ORDER BY 
+    table_schema, table_name;
