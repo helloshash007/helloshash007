@@ -1,0 +1,148 @@
+import psycopg2
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from datetime import datetime
+from psycopg2.extras import RealDictCursor
+import logging
+import os
+import certifi
+
+# === SETUP LOGGING ===
+log_file = f"/var/log/sync_users_{datetime.utcnow().strftime('%Y%m%d')}.log"
+os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+logging.basicConfig(
+    filename=log_file,
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# === CONFIG ===
+DB_CONFIG = {
+    'dbname': 'your_db',
+    'user': 'your_user',
+    'password': 'your_pass',
+    'host': 'your_host',
+    'port': 5432
+}
+
+API_URL = "https://your.api.endpoint/usersync"
+API_HEADERS = {
+    'Authorization': 'Bearer your_b2b_token',
+    'Content-Type': 'application/json'
+}
+
+# === DB HELPERS ===
+def get_customer_id(conn, customer_name):
+    with conn.cursor() as cur:
+        logging.debug(f"Fetching customer ID for: {customer_name}")
+        cur.execute("SELECT id FROM public.customer WHERE name = %s", (customer_name,))
+        result = cur.fetchone()
+        if result:
+            logging.debug(f"Customer ID for {customer_name}: {result[0]}")
+        else:
+            logging.warning(f"No customer ID found for: {customer_name}")
+        return result[0] if result else None
+
+def get_user_from_schema(conn, schema, uid):
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(f'SET search_path TO {schema}')
+        cur.execute("SELECT first_name, last_name, email FROM users WHERE uid = %s", (uid,))
+        result = cur.fetchone()
+        logging.debug(f"Fetched user {uid} from {schema}: {result}")
+        return result
+
+def update_user_in_schema(conn, schema, uid, fname, lname, email):
+    with conn.cursor() as cur:
+        logging.info(f"Updating user {uid} in {schema}")
+        cur.execute(f'SET search_path TO {schema}')
+        cur.execute("""
+            UPDATE users
+            SET first_name = %s,
+                last_name = %s,
+                email = %s,
+                updated_at = %s
+            WHERE uid = %s
+        """, (fname, lname, email, datetime.utcnow(), uid))
+
+# === API SESSION WITH RETRY ===
+def create_retry_session():
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        read=3,
+        connect=3,
+        backoff_factor=1,
+        status_forcelist=(500, 502, 503, 504),
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+# === API CALL ===
+def call_user_api():
+    session = create_retry_session()
+    logging.info("Calling API to fetch user data with retry logic")
+    try:
+        response = session.get(API_URL, headers=API_HEADERS, verify=certifi.where(), timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        logging.info(f"Received {len(data)} users from API")
+        return data
+    except Exception as e:
+        logging.exception(f"API call failed after retries: {e}")
+        raise
+
+# === MAIN FUNCTION ===
+def sync_users():
+    logging.info("Starting user sync job")
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        logging.info("Database connection established")
+
+        api_users = call_user_api()
+
+        for user in api_users:
+            customer_name = user['customer_name']
+            uid = user['uid']
+            api_fname = user['first_name']
+            api_lname = user['last_name']
+            api_email = user['email']
+
+            customer_id = get_customer_id(conn, customer_name)
+            if not customer_id:
+                continue
+
+            schema = f"company{customer_id}"
+            logging.debug(f"Schema for customer {customer_name}: {schema}")
+
+            local_user = get_user_from_schema(conn, schema, uid)
+            if not local_user:
+                logging.warning(f"User {uid} not found in {schema}")
+                continue
+
+            if (local_user['first_name'] != api_fname or
+                local_user['last_name'] != api_lname or
+                local_user['email'] != api_email):
+
+                update_user_in_schema(conn, schema, uid, api_fname, api_lname, api_email)
+
+        conn.commit()
+        logging.info("User sync job completed successfully")
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logging.exception(f"Error during user sync job: {e}")
+    finally:
+        if conn:
+            conn.close()
+        logging.info("Database connection closed")
+
+# === RUN SCRIPT ===
+if __name__ == '__main__':
+    sync_users()
