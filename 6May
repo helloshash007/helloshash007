@@ -193,3 +193,18 @@ if __name__ == "__main__":
     while True:
         schedule.run_pending()
         time.sleep(60)
+
+
+
+
+def get_all_schemas(conn):
+    """Fetch all non-system schemas, excluding 'pg_' and 'information_schema'."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT schema_name
+            FROM information_schema.schemata
+            WHERE schema_name NOT LIKE 'pg_%'
+              AND schema_name != 'information_schema'
+        """)
+        schemas = cur.fetchall()
+    return [s[0] for s in schemas]
