@@ -1,0 +1,181 @@
+import psycopg2
+import requests
+import schedule
+import time
+import logging
+import certifi
+from datetime import datetime
+
+# Logging setup
+logging.basicConfig(
+    filename='uid_update.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
+
+# DB config
+DB_CONFIG = {
+    'host': 'your_db_host',
+    'port': 5432,
+    'user': 'your_db_user',
+    'password': 'your_db_password',
+    'database': 'your_db_name'
+}
+
+# API endpoints
+API_AUTH_URL = 'https://your-api.com/auth'
+API_TRANSLATOR_URL = 'https://your-api.com/translator'
+API_UID_FETCH_URL = 'https://your-api.com/fetch_users'
+
+# Centrify endpoints (replace with actual values)
+CENTRIFY_TOKEN_URL = 'https://your-centrify.com/oauth2/token'
+CENTRIFY_SECRET_URL = 'https://your-centrify.com/secrets/your-secret-id'
+CENTRIFY_AUTH_PAYLOAD = {
+    'client_id': 'centrify_client_id',
+    'client_secret': 'centrify_client_secret',
+    'grant_type': 'client_credentials'
+}
+
+# Constants
+BATCH_SIZE = 200
+WAIT_ON_FAILURE_SECONDS = 1800
+MAX_RETRIES = 3
+
+def retry_on_failure(wait_seconds=WAIT_ON_FAILURE_SECONDS, max_retries=MAX_RETRIES):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries <= max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    logging.error(f"{func.__name__} failed: {e}. Retry {retries}/{max_retries}")
+                    if retries > max_retries:
+                        logging.error(f"Max retries reached in {func.__name__}")
+                        raise
+                    time.sleep(wait_seconds)
+        return wrapper
+    return decorator
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
+def get_all_schemas(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT schema_name
+            FROM information_schema.schemata
+            WHERE schema_name NOT LIKE 'pg_%'
+              AND schema_name != 'information_schema'
+        """)
+        return [s[0] for s in cur.fetchall()]
+
+def get_uids_from_schema(conn, schema):
+    with conn.cursor() as cur:
+        try:
+            cur.execute(f'SELECT uid, first_name, last_name, email FROM "{schema}".users')
+            return cur.fetchall()
+        except Exception as e:
+            logging.warning(f"Skipping schema {schema}: {e}")
+            return []
+
+@retry_on_failure()
+def get_api_credentials_from_centrify():
+    token_resp = requests.post(CENTRIFY_TOKEN_URL, data=CENTRIFY_AUTH_PAYLOAD, verify=certifi.where())
+    token = token_resp.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    secret_resp = requests.get(CENTRIFY_SECRET_URL, headers=headers, verify=certifi.where())
+    secret_data = secret_resp.json()
+    return {
+        'client_id': secret_data['client_id'],
+        'client_secret': secret_data['client_secret']
+    }
+
+@retry_on_failure()
+def get_api_token(credentials):
+    resp = requests.post(API_AUTH_URL, data=credentials, verify=certifi.where())
+    resp.raise_for_status()
+    return resp.json().get('access_token')
+
+@retry_on_failure()
+def call_translator_api(token):
+    headers = {'Authorization': f'Bearer {token}'}
+    resp = requests.get(API_TRANSLATOR_URL, headers=headers, verify=certifi.where())
+    resp.raise_for_status()
+
+@retry_on_failure()
+def fetch_users_from_api(uids, token):
+    headers = {'Authorization': f'Bearer {token}'}
+    resp = requests.post(API_UID_FETCH_URL, json={'uids': uids}, headers=headers, verify=certifi.where())
+    resp.raise_for_status()
+    return resp.json()
+
+def update_user_in_db(conn, schema, uid, first_name, last_name, email):
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE "{schema}".users 
+            SET first_name = %s, last_name = %s, email = %s, updated_time = %s 
+            WHERE uid = %s
+            """,
+            (first_name, last_name, email, datetime.now(), uid)
+        )
+    conn.commit()
+
+def process():
+    logging.info("Starting UID sync...")
+    try:
+        conn = get_db_connection()
+        schemas = get_all_schemas(conn)
+        api_credentials = get_api_credentials_from_centrify()
+        token = get_api_token(api_credentials)
+        call_translator_api(token)
+
+        for schema in schemas:
+            users = get_uids_from_schema(conn, schema)
+            if not users:
+                continue
+
+            uid_map = {
+                u[0]: {'db_first_name': u[1], 'db_last_name': u[2], 'db_email': u[3]}
+                for u in users
+            }
+            uids = list(uid_map.keys())
+
+            for i in range(0, len(uids), BATCH_SIZE):
+                batch = uids[i:i+BATCH_SIZE]
+                api_response = fetch_users_from_api(batch, token)
+
+                for user in api_response.get('users', []):
+                    uid = user['uid']
+                    api_first = user['first_name']
+                    api_last = user['last_name']
+                    api_email = user['email']
+
+                    db_user = uid_map.get(uid)
+                    if db_user and (
+                        db_user['db_first_name'] != api_first or
+                        db_user['db_last_name'] != api_last or
+                        db_user['db_email'] != api_email
+                    ):
+                        try:
+                            update_user_in_db(conn, schema, uid, api_first, api_last, api_email)
+                            logging.info(f"Updated UID {uid} in {schema}")
+                        except Exception as e:
+                            logging.error(f"Failed to update UID {uid} in {schema}: {e}")
+
+    except Exception as e:
+        logging.error(f"Process failed: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+        logging.info("UID sync completed.")
+
+# Schedule to run daily at 6PM
+schedule.every().day.at("18:00").do(process)
+
+if __name__ == "__main__":
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
