@@ -1,0 +1,186 @@
+import psycopg2
+import requests
+import schedule
+import time
+import logging
+import certifi
+from datetime import datetime
+
+# --- Logging Setup ---
+logging.basicConfig(
+    filename='uid_update.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
+
+# --- Config ---
+DB_CONFIG = {
+    'host': 'your_db_host',
+    'port': 5432,
+    'user': 'your_db_user',
+    'password': 'your_db_password',
+    'database': 'your_db_name'
+}
+
+# Replace with your API URLs and credentials
+AUTH_URL = 'https://your-api.com/auth'
+B2B_TRANSLATOR_URL = 'https://your-api.com/b2b'
+DATA_API_URL = 'https://your-api.com/data'
+
+API_USER = 'your_api_username'
+API_PASS = 'your_api_password'
+
+X_ABC_HEADER = 'your-value'  # Replace with actual X-abc header value
+
+BATCH_SIZE = 200
+WAIT_ON_FAILURE_SECONDS = 1800
+MAX_RETRIES = 3
+
+# --- Retry Decorator ---
+def retry_on_failure(wait_seconds=WAIT_ON_FAILURE_SECONDS, max_retries=MAX_RETRIES):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries <= max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    logging.error(f"{func.__name__} failed: {e} (Retry {retries}/{max_retries})")
+                    if retries > max_retries:
+                        raise
+                    time.sleep(wait_seconds)
+        return wrapper
+    return decorator
+
+# --- Database Functions ---
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
+def get_all_schemas(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT schema_name FROM information_schema.schemata
+            WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
+        """)
+        return [s[0] for s in cur.fetchall()]
+
+def get_uids_from_schema(conn, schema):
+    with conn.cursor() as cur:
+        try:
+            cur.execute(f'SELECT uid, first_name, last_name, email FROM "{schema}".users')
+            return cur.fetchall()
+        except Exception as e:
+            logging.warning(f"Skipping schema '{schema}': {e}")
+            return []
+
+def update_user_in_db(conn, schema, uid, first_name, last_name, email):
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE "{schema}".users 
+            SET first_name = %s, last_name = %s, email = %s, updated_time = %s 
+            WHERE uid = %s
+            """,
+            (first_name, last_name, email, datetime.now(), uid)
+        )
+    conn.commit()
+
+# --- API Functions ---
+@retry_on_failure()
+def get_initial_token():
+    resp = requests.post(
+        AUTH_URL,
+        data={'username': API_USER, 'password': API_PASS},
+        verify=certifi.where()
+    )
+    resp.raise_for_status()
+    return resp.json()['access_token']
+
+@retry_on_failure()
+def get_final_token(initial_token):
+    headers = {'Authorization': f'Bearer {initial_token}'}
+    resp = requests.get(B2B_TRANSLATOR_URL, headers=headers, verify=certifi.where())
+    resp.raise_for_status()
+    return resp.json()['access_token']
+
+@retry_on_failure()
+def fetch_users_from_api(uids, token):
+    headers = {
+        'X-abc': X_ABC_HEADER,
+        'X-Token': token,
+        'Content-Type': 'application/json'
+    }
+    payload = {
+        "flyer": [{
+            "Filter key": "id",
+            "Filter value": uids,
+            "filterOperation": "in"
+        }],
+        "recordPerpage": BATCH_SIZE
+    }
+    resp = requests.post(DATA_API_URL, json=payload, headers=headers, verify=certifi.where())
+    resp.raise_for_status()
+    return resp.json()['users']
+
+# --- Main Logic ---
+def sync_uids():
+    logging.info("Starting UID sync process...")
+    try:
+        conn = get_db_connection()
+        schemas = get_all_schemas(conn)
+
+        initial_token = get_initial_token()
+        final_token = get_final_token(initial_token)
+
+        for schema in schemas:
+            users = get_uids_from_schema(conn, schema)
+            if not users:
+                continue
+
+            uid_map = {
+                u[0]: {'db_first': u[1], 'db_last': u[2], 'db_email': u[3]}
+                for u in users
+            }
+            uids = list(uid_map.keys())
+
+            for i in range(0, len(uids), BATCH_SIZE):
+                batch = uids[i:i+BATCH_SIZE]
+                try:
+                    api_users = fetch_users_from_api(batch, final_token)
+                except Exception as e:
+                    logging.error(f"API call failed for batch {batch[0]}-{batch[-1]}: {e}")
+                    continue
+
+                for user in api_users:
+                    uid = user['uid']
+                    api_first = user.get('first_name', '')
+                    api_last = user.get('last_name', '')
+                    api_email = user.get('email', '')
+
+                    db_user = uid_map.get(uid)
+                    if db_user and (
+                        db_user['db_first'] != api_first or
+                        db_user['db_last'] != api_last or
+                        db_user['db_email'] != api_email
+                    ):
+                        try:
+                            update_user_in_db(conn, schema, uid, api_first, api_last, api_email)
+                            logging.info(f"Updated UID {uid} in {schema}")
+                        except Exception as e:
+                            logging.error(f"Failed to update UID {uid} in {schema}: {e}")
+    except Exception as e:
+        logging.error(f"Process failed: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+        logging.info("UID sync process completed.")
+
+# --- Scheduler ---
+schedule.every().day.at("18:00").do(sync_uids)
+
+if __name__ == "__main__":
+    logging.info("Scheduler started. Waiting for 6 PM sync.")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
