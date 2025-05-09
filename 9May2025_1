@@ -1,0 +1,168 @@
+import psycopg2
+import requests
+import json
+import logging
+import schedule
+import time
+import certifi
+from datetime import datetime
+
+# Configuration
+DB_CONFIG = {
+    'host': 'your-db-host',
+    'port': 5432,
+    'dbname': 'your-db-name',
+    'user': 'your-username',
+    'password': 'your-password'
+}
+
+TRANSLATOR_URL = 'https://translator.example.com/token'
+DATA_API_URL = 'https://data-api.example.com/query'
+
+USERNAME = 'your-api-username'
+PASSWORD = 'your-api-password'
+
+DRY_RUN = False  # Set True for testing without DB update
+
+logging.basicConfig(filename='user_sync.log', level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
+def get_schemas(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%'")
+        return [row[0] for row in cur.fetchall()]
+
+def get_users(conn, schema):
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'''
+                SELECT user_ref, first_name, last_name, email FROM "{schema}".users
+            ''')
+            return cur.fetchall()
+    except Exception as e:
+        logging.warning(f"Failed to fetch users from schema {schema}: {e}")
+        conn.rollback()
+        return []
+
+def get_api_token():
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "input_token_state": {
+            "token_type": "CREDENTIAL",
+            "username": USERNAME,
+            "password": PASSWORD
+        },
+        "output_token_state": {
+            "token_type": "JWT"
+        }
+    }
+
+    response = requests.post(TRANSLATOR_URL, headers=headers, json=payload, verify=certifi.where())
+    response.raise_for_status()
+    return response.json()['access_token']
+
+def fetch_user_details_from_api(token, user_refs):
+    headers = {
+        'X-abc': 'ABC',
+        'X-E2E-Trust-Token': token,
+        'Content-Type': 'application/json'
+    }
+    payload = {
+        "filter criteria": [{
+            "filter key": "GUID",
+            "filter value": user_refs,
+            "filterOpertaion": "in"
+        }],
+        "recordsPerPage": 200
+    }
+
+    response = requests.post(DATA_API_URL, headers=headers, json=payload, verify=certifi.where())
+    response.raise_for_status()
+    return response.json().get('results', [])
+
+def update_users(conn, schema, updates):
+    for user in updates:
+        try:
+            with conn.cursor() as cur:
+                if DRY_RUN:
+                    logging.info(f"[Dry Run] Would update {user['user_ref']} in schema {schema}")
+                else:
+                    cur.execute(f'''
+                        UPDATE "{schema}".users
+                        SET first_name = %s, last_name = %s, email = %s, updated_at = %s
+                        WHERE user_ref = %s
+                    ''', (
+                        user['first_name'],
+                        user['last_name'],
+                        user['email'],
+                        datetime.utcnow(),
+                        user['user_ref']
+                    ))
+                    logging.info(f"Updated {user['user_ref']} in schema {schema}")
+        except Exception as e:
+            logging.warning(f"Error updating {user['user_ref']} in schema {schema}: {e}")
+            conn.rollback()
+
+    if not DRY_RUN:
+        conn.commit()
+
+def sync_users():
+    logging.info("Job started")
+    conn = get_db_connection()
+    try:
+        schemas = get_schemas(conn)
+        token = get_api_token()
+
+        for schema in schemas:
+            logging.info(f"Processing schema: {schema}")
+            users = get_users(conn, schema)
+
+            user_refs = [u[0] for u in users]
+            ref_to_local = {u[0]: {'first_name': u[1], 'last_name': u[2], 'email': u[3]} for u in users}
+
+            for i in range(0, len(user_refs), 200):
+                chunk = user_refs[i:i + 200]
+                try:
+                    api_results = fetch_user_details_from_api(token, chunk)
+                except Exception as e:
+                    logging.error(f"API error for chunk starting with {chunk[0]}: {e}")
+                    time.sleep(1800)  # wait 30 minutes
+                    continue
+
+                updates = []
+                for result in api_results:
+                    ref = result.get('user_ref')
+                    if not ref or ref not in ref_to_local:
+                        continue
+
+                    local = ref_to_local[ref]
+                    if (
+                        local['first_name'] != result['first_name'] or
+                        local['last_name'] != result['last_name'] or
+                        local['email'] != result['email']
+                    ):
+                        updates.append({
+                            'user_ref': ref,
+                            'first_name': result['first_name'],
+                            'last_name': result['last_name'],
+                            'email': result['email']
+                        })
+
+                update_users(conn, schema, updates)
+
+    except Exception as e:
+        logging.error(f"Job failed: {e}")
+    finally:
+        conn.close()
+        logging.info("Job finished")
+
+# Schedule for daily 6 PM
+schedule.every().day.at("18:00").do(sync_users)
+
+if __name__ == "__main__":
+    logging.info("Scheduler started. Waiting for 6PM...")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
