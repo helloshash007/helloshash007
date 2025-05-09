@@ -1,0 +1,194 @@
+import psycopg2
+import requests
+import json
+import time
+import certifi
+import urllib3
+import schedule
+import logging
+from datetime import datetime
+
+# --- Configuration ---
+DB_CONFIG = {
+    'host': 'your-db-host',
+    'port': 5432,
+    'database': 'your-db-name',
+    'user': 'your-db-user',
+    'password': 'your-db-password'
+}
+
+TRANSLATOR_URL = 'https://your-translator-url'
+DATA_API_URL = 'https://your-data-api-url'
+USERNAME = 'your-username'
+PASSWORD = 'your-password'
+
+HEADERS_TEMPLATE = {
+    'X-chane': 'ABC',
+    'Content-Type': 'application/json'
+}
+
+LOG_FILE = 'uid_sync.log'
+MAX_RETRIES = 3
+RETRY_INTERVAL = 1800  # 30 minutes
+DRY_RUN = True  # Set to False to enable actual updates
+
+# --- Setup Logging ---
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
+                    format='%(asctime)s %(levelname)s:%(message)s')
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def get_schemas(cursor):
+    cursor.execute("SELECT schema_name FROM information_schema.schemata")
+    return [row[0] for row in cursor.fetchall() if not row[0].startswith('pg_')]
+
+
+def get_uids(conn):
+    cursor = conn.cursor()
+    schemas = get_schemas(cursor)
+    uids = set()
+    for schema in schemas:
+        try:
+            cursor.execute(f"SELECT uid FROM {schema}.users")
+            rows = cursor.fetchall()
+            for row in rows:
+                uids.add((schema, row[0]))
+        except Exception as e:
+            logging.warning(f"Failed to fetch users from {schema}: {e}")
+    return uids
+
+
+def chunk_uids(uid_tuples, size=200):
+    chunk = []
+    for item in uid_tuples:
+        chunk.append(item)
+        if len(chunk) == size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
+def get_token():
+    payload = {
+        "input_token_state": {
+            "token_type": "CREDENTIAL",
+            "username": USERNAME,
+            "password": PASSWORD
+        },
+        "output_token_state": {
+            "token_type": "JWT"
+        }
+    }
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.post(
+                TRANSLATOR_URL,
+                headers=headers,
+                json=payload,
+                verify=certifi.where()
+            )
+            response.raise_for_status()
+            return response.json()['token']
+        except Exception as e:
+            logging.error(f"Token fetch attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_INTERVAL)
+    return None
+
+
+def call_data_api(data_token, uids):
+    payload = {
+        "filter criteria": [{
+            "filter key": "GUID",
+            "filter value": [uid for _, uid in uids],
+            "filterOpertaion": "in"
+        }],
+        "recordsPerPage": 200
+    }
+
+    headers = HEADERS_TEMPLATE.copy()
+    headers['X-E2E-Trust-Token'] = data_token
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.post(
+                DATA_API_URL,
+                headers=headers,
+                json=payload,
+                verify=certifi.where()
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logging.error(f"Data API attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_INTERVAL)
+    return None
+
+
+def update_users(conn, uid_data):
+    cursor = conn.cursor()
+    for entry in uid_data:
+        uid = entry.get('GUID')
+        email = entry.get('email')
+        fname = entry.get('first_name')
+        lname = entry.get('last_name')
+
+        for schema in get_schemas(cursor):
+            try:
+                cursor.execute(f"SELECT first_name, last_name, email FROM {schema}.users WHERE uid = %s", (uid,))
+                result = cursor.fetchone()
+                if result:
+                    db_fname, db_lname, db_email = result
+                    if (fname != db_fname or lname != db_lname or email != db_email):
+                        if DRY_RUN:
+                            logging.info(f"DRY RUN - Would update {uid} in {schema}: {fname} {lname}, {email}")
+                        else:
+                            cursor.execute(
+                                f"UPDATE {schema}.users SET first_name=%s, last_name=%s, email=%s, updated_at=%s WHERE uid=%s",
+                                (fname, lname, email, datetime.now(), uid)
+                            )
+                            logging.info(f"Updated {uid} in {schema}: {fname} {lname}, {email}")
+            except Exception as e:
+                logging.warning(f"Error updating {uid} in {schema}: {e}")
+    if not DRY_RUN:
+        conn.commit()
+
+
+def sync_uids():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        uid_tuples = get_uids(conn)
+
+        for uid_chunk in chunk_uids(uid_tuples):
+            data_token = get_token()
+            if data_token:
+                user_data = call_data_api(data_token, uid_chunk)
+                if user_data and 'data' in user_data:
+                    update_users(conn, user_data['data'])
+    except Exception as e:
+        logging.error(f"Sync failed: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+
+# --- Schedule Job ---
+schedule.every().day.at("18:00").do(sync_uids)
+
+logging.info("Scheduler started. Waiting for next run...")
+while True:
+    schedule.run_pending()
+    time.sleep(60)
+
+
+Your script now includes a dry-run mode that logs changes without updating the database. You can set DRY_RUN = False to enable actual updates after confirming everything works as expected.
+
+Would you like a test run example with mock data?
+
