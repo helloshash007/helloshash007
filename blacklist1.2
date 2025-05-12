@@ -1,0 +1,205 @@
+import psycopg2
+import subprocess
+import json
+import logging
+from datetime import datetime
+import time
+import schedule
+
+# --- Configuration ---
+DB_CONFIG = {
+    "host": "your_postgres_host",
+    "port": 5432,
+    "database": "your_db",
+    "user": "your_user",
+    "password": "your_password"
+}
+
+TRANSLATOR_URL = "https://your-translator-url"
+DATA_API_URL = "https://your-data-api-url"
+USERNAME = "your_username"
+PASSWORD = "your_password"
+BATCH_SIZE = 200
+
+# --- Logging Setup ---
+log_file = f"uid_sync_main_{datetime.now().strftime('%Y%m%d')}.log"
+api_log_file = f"uid_sync_api_{datetime.now().strftime('%Y%m%d')}.log"
+
+logging.basicConfig(filename=log_file, level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+api_logger = logging.getLogger('api_logger')
+api_logger.setLevel(logging.INFO)
+api_handler = logging.FileHandler(api_log_file)
+api_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+api_logger.addHandler(api_handler)
+
+def log_api_call(title, payload, response):
+    masked = json.dumps(payload, indent=2)
+    api_logger.info(f"{title} - Request:\n{masked}")
+    api_logger.info(f"{title} - Response:\n{json.dumps(response, indent=2) if isinstance(response, dict) else response[:1000]}")
+
+# --- Get JWT Token ---
+def get_token():
+    payload = {
+        "input_token_state": {
+            "token_type": "CREDENTIAL",
+            "username": USERNAME,
+            "password": "****"
+        },
+        "output_token_state": {
+            "token_type": "JWT"
+        }
+    }
+
+    real_payload = {
+        "input_token_state": {
+            "token_type": "CREDENTIAL",
+            "username": USERNAME,
+            "password": PASSWORD
+        },
+        "output_token_state": {
+            "token_type": "JWT"
+        }
+    }
+
+    cmd = [
+        "curl", "-s", "-X", "POST", TRANSLATOR_URL,
+        "-H", "Content-Type: application/json",
+        "-d", json.dumps(real_payload)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        logging.error(f"Translator call failed: {result.stderr}")
+        raise Exception("Token request failed")
+
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        logging.error("Invalid token response")
+        raise
+
+    log_api_call("Translator API", payload, response)
+    return response.get("access_token")
+
+# --- Call Data API ---
+def get_user_data(token, user_refs):
+    payload = {
+        "filter criteria": [{
+            "filter key": "GUID",
+            "filter value": user_refs,
+            "filterOpertaion": "in"
+        }],
+        "recordsPerPage": BATCH_SIZE
+    }
+
+    cmd = [
+        "curl", "-s", "-X", "POST", DATA_API_URL,
+        "-H", "X-abc: ABC",
+        "-H", f"X-E2E-Trust-Token: {token}",
+        "-H", "Content-Type: application/json",
+        "-d", json.dumps(payload)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        logging.error(f"Data API failed: {result.stderr}")
+        raise Exception("Data API failed")
+
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        logging.error(f"Invalid JSON from Data API: {result.stdout[:1000]}")
+        return []
+
+    log_api_call("Data API", payload, response)
+    return response.get("results", [])
+
+# --- Main Sync Logic ---
+def sync_users():
+    logging.info("Starting sync process...")
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        conn.autocommit = False
+
+        # 1. Get all non-system schemas
+        cursor.execute("SELECT schema_name FROM information_schema.schemata")
+        schemas = [s[0] for s in cursor.fetchall() if not s[0].startswith("pg_") and s[0] != "information_schema"]
+
+        # 2. Build user_ref list with schema mapping
+        user_refs = []
+        user_schema_map = {}
+        for schema in schemas:
+            try:
+                cursor.execute(f"SELECT user_ref FROM {schema}.users")
+                refs = cursor.fetchall()
+                for (ref,) in refs:
+                    user_refs.append(ref)
+                    user_schema_map.setdefault(ref, []).append(schema)
+            except Exception as e:
+                logging.warning(f"Skipping schema {schema}: {e}")
+                conn.rollback()
+
+        token = get_token()
+
+        # 3. Chunked API calls
+        for i in range(0, len(user_refs), BATCH_SIZE):
+            batch = user_refs[i:i + BATCH_SIZE]
+            data = get_user_data(token, batch)
+            data_dict = {entry["guid"]: entry for entry in data}
+
+            # 4. For each returned user_ref, match & update
+            for guid, api_data in data_dict.items():
+                if guid not in user_schema_map:
+                    continue
+                for schema in user_schema_map[guid]:
+                    try:
+                        cursor.execute(
+                            f"SELECT first_name, last_name, email FROM {schema}.users WHERE user_ref = %s",
+                            (guid,)
+                        )
+                        row = cursor.fetchone()
+                        if not row:
+                            continue
+
+                        db_first, db_last, db_email = row
+                        api_first = api_data["first_name"]
+                        api_last = api_data["last_name"]
+                        api_email = api_data["email"]
+
+                        log_msg = (
+                            f"user_ref {guid} in schema {schema} comparison:\n"
+                            f"  DB:  {db_first} / {db_last} / {db_email}\n"
+                            f"  API: {api_first} / {api_last} / {api_email}"
+                        )
+
+                        if (db_first != api_first or db_last != api_last or db_email != api_email):
+                            cursor.execute(
+                                f"UPDATE {schema}.users SET first_name = %s, last_name = %s, email = %s, updated_time = %s WHERE user_ref = %s",
+                                (api_first, api_last, api_email, datetime.utcnow(), guid)
+                            )
+                            logging.info(log_msg)
+                            logging.info(f"Updated user_ref {guid} in schema {schema}")
+                        else:
+                            logging.info(log_msg + " — No update needed.")
+
+                    except Exception as e:
+                        logging.error(f"Failed to update {guid} in {schema}: {e}")
+                        conn.rollback()
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logging.info("Sync completed successfully.")
+
+    except Exception as e:
+        logging.error(f"Full sync failed: {e}")
+
+# --- Schedule every minute ---
+schedule.every(1).minutes.do(sync_users)
+
+if __name__ == "__main__":
+    logging.info("User sync job started")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
