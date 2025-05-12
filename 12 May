@@ -1,0 +1,73 @@
+import psycopg2 import subprocess import json import certifi import logging from datetime import datetime import time import schedule
+
+--- Configuration ---
+
+DB_CONFIG = { "host": "your_postgres_host", "port": 5432, "database": "your_db", "user": "your_db_user", "password": "your_db_pass" } TRANSLATOR_URL = "https://your-translator-url" DATA_API_URL = "https://your-data-api-url" USERNAME = "your_username" PASSWORD = "your_password" BATCH_SIZE = 200 LOG_FILE = "uid_sync.log"
+
+--- Logging ---
+
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+--- CURL Functions ---
+
+def get_token_with_curl(username, password, translator_url): payload = json.dumps({ "input_token_state": { "token_type": "CREDENTIAL", "username": username, "password": password }, "output_token_state": { "token_type": "JWT" } }) curl_cmd = [ "curl", "-s", "-X", "POST", translator_url, "-H", "Content-Type: application/json", "-d", payload ] result = subprocess.run(curl_cmd, capture_output=True, text=True) if result.returncode != 0: logging.error(f"Translator token request failed: {result.stderr}") raise Exception("Translator token request failed") return json.loads(result.stdout)['access_token']
+
+def call_data_api_with_curl(token, user_refs, data_api_url): payload = json.dumps({ "filter criteria": [{ "filter key": "GUID", "filter value": user_refs, "filterOpertaion": "in" }], "recordsPerPage": 200 }) curl_cmd = [ "curl", "-s", "-X", "POST", data_api_url, "-H", "X-abc: ABC", f"-H", f"X-E2E-Trust-Token: {token}", "-H", "Content-Type: application/json", "-d", payload ] result = subprocess.run(curl_cmd, capture_output=True, text=True) if result.returncode != 0: logging.error(f"Data API request failed: {result.stderr}") raise Exception("Data API request failed") return json.loads(result.stdout).get("results", [])
+
+--- DB Sync Logic ---
+
+def sync_users(): try: conn = psycopg2.connect(**DB_CONFIG) conn.autocommit = False cursor = conn.cursor()
+
+cursor.execute("SELECT schema_name FROM information_schema.schemata")
+    schemas = [row[0] for row in cursor.fetchall() if not row[0].startswith("pg_")]
+
+    all_user_refs = []
+    for schema in schemas:
+        try:
+            cursor.execute(f"SELECT user_ref, first_name, last_name, email FROM {schema}.users")
+            rows = cursor.fetchall()
+            all_user_refs.extend([(schema, *row) for row in rows])
+        except Exception as e:
+            logging.warning(f"Skipping schema {schema} due to error: {str(e)}")
+            conn.rollback()
+
+    token = get_token_with_curl(USERNAME, PASSWORD, TRANSLATOR_URL)
+
+    for i in range(0, len(all_user_refs), BATCH_SIZE):
+        batch = all_user_refs[i:i+BATCH_SIZE]
+        user_ids = [ref[1] for ref in batch]
+
+        api_results = call_data_api_with_curl(token, user_ids, DATA_API_URL)
+        api_dict = {user['guid']: user for user in api_results}
+
+        for schema, user_ref, first_name, last_name, email in batch:
+            api_user = api_dict.get(user_ref)
+            if not api_user:
+                continue
+            updated = False
+            if api_user['first_name'] != first_name or api_user['last_name'] != last_name or api_user['email'] != email:
+                updated = True
+                try:
+                    cursor.execute(
+                        f"UPDATE {schema}.users SET first_name=%s, last_name=%s, email=%s, updated_time=%s WHERE user_ref=%s",
+                        (api_user['first_name'], api_user['last_name'], api_user['email'], datetime.utcnow(), user_ref))
+                except Exception as e:
+                    logging.error(f"Failed to update user {user_ref} in schema {schema}: {str(e)}")
+                    conn.rollback()
+            if updated:
+                logging.info(f"Updated user_ref {user_ref} in schema {schema}")
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+except Exception as e:
+    logging.error(f"Error in sync_users: {str(e)}")
+    time.sleep(1800)  # Retry after 30 minutes
+    sync_users()
+
+--- Scheduler ---
+
+schedule.every().day.at("18:00").do(sync_users)
+
+if name == "main": logging.info("UID sync service started") while True: schedule.run_pending() time.sleep(60)
+
