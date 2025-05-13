@@ -7,3 +7,22 @@ elif isinstance(response, list):
 
 logging.warning("No user data found in API response.")
 return []
+
+
+
+def parse_api_response(resp):
+    try:
+        response = resp.json()
+        logging.info(f"[API Raw Response] {json.dumps(response, indent=2)}")
+
+        # Extract user list from response
+        if isinstance(response, dict):
+            if "userList" in response and isinstance(response["userList"], list):
+                return response["userList"]
+
+        logging.warning("No user data found in API response structure.")
+
+    except Exception as e:
+        logging.error(f"[API Parse Error] Failed to parse API response: {e}")
+
+    return []
