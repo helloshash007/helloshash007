@@ -1,0 +1,9 @@
+if isinstance(response, dict):
+    for key in ["results", "data", "users"]:
+        if key in response and isinstance(response[key], list):
+            return response[key]
+elif isinstance(response, list):
+    return response
+
+logging.warning("No user data found in API response.")
+return []
