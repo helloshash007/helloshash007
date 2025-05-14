@@ -1,0 +1,187 @@
+import os
+import json
+import time
+import certifi
+import psycopg2
+import logging
+import requests
+import schedule
+from datetime import datetime
+from urllib3.exceptions import InsecureRequestWarning
+import urllib3
+
+# Disable SSL warnings (can be removed in production)
+urllib3.disable_warnings(InsecureRequestWarning)
+
+# Configuration
+TRANSLATOR_URL = "https://your-translator-api"
+DATA_API_URL = "https://your-data-api"
+USERNAME = "your_username"
+PASSWORD = "your_password"
+
+HEADERS_TRANSLATOR = {
+    "Content-Type": "application/json"
+}
+
+HEADERS_DATA_API = {
+    "X-Change": "ABC",
+    "Content-Type": "application/json"
+}
+
+POSTGRES_CONFIG = {
+    "host": "localhost",
+    "port": 5432,
+    "user": "your_db_user",
+    "password": "your_db_password",
+    "dbname": "your_db"
+}
+
+LOG_FILE = "uid_sync_main.log"
+
+# Setup logging
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+# Fetch JWT token from translator
+def get_jwt_token():
+    payload = {
+        "input_token_state": {
+            "token_type": "CREDENTIAL",
+            "username": USERNAME,
+            "password": PASSWORD
+        },
+        "output_token_state": {
+            "token_type": "JWT"
+        }
+    }
+    try:
+        logging.info("Requesting JWT token from Translator API")
+        response = requests.post(
+            TRANSLATOR_URL,
+            headers=HEADERS_TRANSLATOR,
+            data=json.dumps(payload),
+            verify=certifi.where()
+        )
+        response.raise_for_status()
+        token = response.json().get("access_token") or response.text
+        logging.info(f"Received Translator token: {token[:10]}...")
+        return token
+    except Exception as e:
+        logging.error(f"Failed to get JWT token: {str(e)}")
+        return None
+
+# Fetch user data from API
+def get_user_data(jwt_token, user_refs):
+    payload = {
+        "filter criteria": [{
+            "filter key": "GUID",
+            "filter value": user_refs,
+            "filterOpertaion": "in"
+        }],
+        "recordsPerPage": 200
+    }
+
+    headers = HEADERS_DATA_API.copy()
+    headers["X-E2E-Trust-Token"] = jwt_token
+
+    try:
+        logging.info(f"Calling Data API with {len(user_refs)} GUIDs")
+        response = requests.post(
+            DATA_API_URL,
+            headers=headers,
+            json=payload,
+            verify=certifi.where()
+        )
+        response.raise_for_status()
+        data = response.json().get("userList", [])
+        logging.info(f"Received {len(data)} records from Data API")
+        return data
+    except Exception as e:
+        logging.error(f"Failed to fetch data from API: {str(e)}")
+        return []
+
+# Main sync logic
+def sync_users():
+    try:
+        conn = psycopg2.connect(**POSTGRES_CONFIG)
+        conn.autocommit = False
+        cursor = conn.cursor()
+
+        # Fetch schemas excluding system ones
+        cursor.execute("SELECT schema_name FROM information_schema.schemata")
+        schemas = [row[0] for row in cursor.fetchall() if not row[0].startswith("pg_") and row[0] != "information_schema"]
+
+        all_user_refs = []
+        schema_user_map = {}
+
+        for schema in schemas:
+            try:
+                cursor.execute(f"SELECT user_ref FROM {schema}.users")
+                refs = [row[0] for row in cursor.fetchall()]
+                schema_user_map[schema] = refs
+                all_user_refs.extend(refs)
+            except Exception as e:
+                logging.warning(f"Skipping schema {schema}: {str(e)}")
+
+        logging.info(f"Collected total {len(all_user_refs)} user_refs")
+
+        token = get_jwt_token()
+        if not token:
+            logging.error("Aborting sync: Token retrieval failed.")
+            return
+
+        # Process in chunks
+        batch_size = 200
+        for i in range(0, len(all_user_refs), batch_size):
+            batch = all_user_refs[i:i+batch_size]
+            api_users = get_user_data(token, batch)
+
+            for api_user in api_users:
+                ref = api_user.get("guid")
+                first = api_user.get("firstname")
+                last = api_user.get("last name")
+                email = api_user.get("email")
+
+                for schema, refs in schema_user_map.items():
+                    if ref in refs:
+                        try:
+                            cursor.execute(
+                                f"SELECT first_name, last_name, email FROM {schema}.users WHERE user_ref = %s",
+                                (ref,)
+                            )
+                            row = cursor.fetchone()
+
+                            if row and (row[0] != first or row[1] != last or row[2] != email):
+                                cursor.execute(
+                                    f"""UPDATE {schema}.users
+                                        SET first_name = %s, last_name = %s, email = %s, updated_time = %s
+                                        WHERE user_ref = %s""",
+                                    (first, last, email, datetime.now(), ref)
+                                )
+                                logging.info(f"Updated user_ref {ref} in schema {schema}")
+                        except Exception as e:
+                            logging.error(f"Update failed for user_ref {ref} in schema {schema}: {str(e)}")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logging.info("Sync completed successfully.")
+
+    except Exception as e:
+        logging.error(f"Database connection or sync error: {str(e)}")
+
+# Scheduler job
+def job():
+    logging.info("Starting scheduled sync job")
+    sync_users()
+
+# Start scheduler
+schedule.every(1).minutes.do(job)
+logging.info("Scheduler started, running every minute")
+
+while True:
+    schedule.run_pending()
+    time.sleep(1)
