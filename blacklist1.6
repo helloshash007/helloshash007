@@ -1,0 +1,162 @@
+import subprocess
+import json
+import time
+import psycopg2
+import logging
+import schedule
+from datetime import datetime
+
+# Configuration
+TRANSLATOR_URL = "https://your-translator-api"
+DATA_API_URL = "https://your-data-api"
+USERNAME = "your_username"
+PASSWORD = "your_password"
+LOG_FILE = "uid_sync_main.log"
+POSTGRES_CONFIG = {
+    "host": "localhost",
+    "port": 5432,
+    "user": "your_db_user",
+    "password": "your_db_password",
+    "dbname": "your_db"
+}
+
+# Logging
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+
+def get_jwt_token():
+    payload = {
+        "input_token_state": {
+            "token_type": "CREDENTIAL",
+            "username": USERNAME,
+            "password": PASSWORD
+        },
+        "output_token_state": {
+            "token_type": "JWT"
+        }
+    }
+    curl_cmd = [
+        "curl", "-s", "-X", "POST", TRANSLATOR_URL,
+        "-H", "Content-Type: application/json",
+        "-d", json.dumps(payload)
+    ]
+    try:
+        logging.info("Fetching JWT token using curl...")
+        result = subprocess.run(curl_cmd, capture_output=True, text=True)
+        result.check_returncode()
+        logging.debug(f"Translator response: {result.stdout}")
+        data = json.loads(result.stdout)
+        token = data.get("access_token")
+        if not token:
+            raise Exception("access_token not found in response")
+        logging.info(f"JWT token fetched successfully.")
+        return token
+    except Exception as e:
+        logging.error(f"Failed to get JWT token: {e}")
+        return None
+
+def get_user_data(token, guids):
+    payload = {
+        "filter criteria": [{
+            "filter key": "GUID",
+            "filter value": guids,
+            "filterOpertaion": "in"
+        }],
+        "recordsPerPage": 200
+    }
+    curl_cmd = [
+        "curl", "-s", "-X", "POST", DATA_API_URL,
+        "-H", "X-Change: ABC",
+        "-H", f"X-E2E-Trust-Token: {token}",
+        "-H", "Content-Type: application/json",
+        "-d", json.dumps(payload)
+    ]
+    try:
+        logging.info(f"Calling Data API using curl for GUIDs: {guids}")
+        result = subprocess.run(curl_cmd, capture_output=True, text=True)
+        result.check_returncode()
+        logging.debug(f"Data API Response: {result.stdout}")
+        data = json.loads(result.stdout)
+        return data.get("userList", [])
+    except Exception as e:
+        logging.error(f"Failed to fetch data from API: {e}")
+        return []
+
+def sync_users():
+    try:
+        conn = psycopg2.connect(**POSTGRES_CONFIG)
+        conn.autocommit = False
+        cursor = conn.cursor()
+        cursor.execute("SELECT schema_name FROM information_schema.schemata")
+        schemas = [row[0] for row in cursor.fetchall() if not row[0].startswith("pg_") and row[0] != "information_schema"]
+
+        all_refs = []
+        schema_map = {}
+        for schema in schemas:
+            try:
+                cursor.execute(f"SELECT user_ref FROM {schema}.users")
+                refs = [row[0] for row in cursor.fetchall()]
+                schema_map[schema] = refs
+                all_refs.extend(refs)
+            except Exception as e:
+                logging.warning(f"Skipping schema {schema}: {e}")
+
+        logging.info(f"Collected total {len(all_refs)} user_refs from all schemas.")
+
+        token = get_jwt_token()
+        if not token:
+            logging.error("Token fetch failed, exiting sync.")
+            return
+
+        batch_size = 200
+        for i in range(0, len(all_refs), batch_size):
+            batch = all_refs[i:i + batch_size]
+            users = get_user_data(token, batch)
+            logging.info(f"Processing {len(users)} users from API.")
+
+            for u in users:
+                guid = u.get("guid")
+                fname, lname, email = u.get("firstname"), u.get("last name"), u.get("email")
+
+                for schema, ref_list in schema_map.items():
+                    if guid in ref_list:
+                        try:
+                            cursor.execute(f"SELECT first_name, last_name, email FROM {schema}.users WHERE user_ref = %s", (guid,))
+                            row = cursor.fetchone()
+                            if not row:
+                                logging.warning(f"user_ref {guid} not found in schema {schema}")
+                                continue
+
+                            if row[0] != fname or row[1] != lname or row[2] != email:
+                                cursor.execute(
+                                    f"""UPDATE {schema}.users
+                                        SET first_name = %s, last_name = %s, email = %s, updated_time = %s
+                                        WHERE user_ref = %s""",
+                                    (fname, lname, email, datetime.now(), guid)
+                                )
+                                logging.info(f"Updated user_ref {guid} in schema {schema}")
+                            else:
+                                logging.info(f"No update needed for user_ref {guid} in schema {schema}")
+                        except Exception as e:
+                            logging.error(f"Failed update for user_ref {guid} in schema {schema}: {e}")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logging.info("User sync completed successfully.")
+    except Exception as e:
+        logging.error(f"Database connection/sync failure: {e}")
+
+# Schedule
+def job():
+    logging.info("Scheduled job started.")
+    sync_users()
+
+schedule.every(1).minutes.do(job)
+logging.info("Sync service started. Running every minute.")
+
+while True:
+    schedule.run_pending()
+    time.sleep(1)
