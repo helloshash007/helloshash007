@@ -1,0 +1,10 @@
+parameters {
+  extendedChoice(
+    name: 'Service',
+    type: 'PT_CHECKBOX',
+    description: 'Select one or more services',
+    multiSelectDelimiter: ',',
+    quoteValue: false,
+    value: 'LoginService,OrderService,BillingService'
+  )
+}
