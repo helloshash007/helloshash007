@@ -1,0 +1,12 @@
+<VirtualHost <IP>:443>
+  ServerName your.domain.com
+
+  ProxyPass / http://127.0.0.1:3000/
+  ProxyPassReverse / http://127.0.0.1:3000/
+
+  SSLEngine on
+  SSLCertificateFile /etc/pki/tls/certs/your.crt
+  SSLCertificateKeyFile /etc/pki/tls/private/your.key
+
+  Require all granted
+</VirtualHost>
